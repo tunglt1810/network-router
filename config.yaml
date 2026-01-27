@@ -1,0 +1,91 @@
+# Cấu hình cho Network Router CLI
+
+# Tự động refresh routing theo lịch (Cron syntax)
+# Ví dụ: mỗi 30 phút ("*/30 * * * *") hoặc mỗi giờ ("0 * * * *")
+# Để trống để tắt tính năng này
+route_refresh_cron: '*/30 * * * *'
+
+# Danh sách các domain routing qua Phone (Tethering)
+# Wildcard được hỗ trợ ví dụ: *.internal.com
+tether_domains:
+  # Github Copilot
+  # Authentication domains (critical for agent mode)
+  - 'vscode-auth.github.com'
+  - 'api.github.com'
+
+  # Copilot API endpoints
+  - '*.githubcopilot.com'
+  - 'copilot-proxy.githubusercontent.com'
+  - 'copilot-telemetry.githubusercontent.com'
+  - 'origin-tracker.githubusercontent.com'
+
+  # Telemetry and tracking
+  - 'collector.github.com'
+  - 'default.exp-tas.com'
+
+  # Static assets
+  - 'github.githubassets.com'
+
+  # Antigravity (Google AI)
+  # Authentication domains (critical for OAuth)
+  - 'accounts.google.com'
+  - 'oauth2.googleapis.com'
+  - '*.clients0.google.com'
+  - '*.clients1.google.com'
+  - '*.clients2.google.com'
+  - '*.clients3.google.com'
+  - '*.clients4.google.com'
+  - '*.clients5.google.com'
+  - '*.clients6.google.com'
+
+  # Gemini API endpoints
+  - 'generativelanguage.googleapis.com'
+  - 'googleapis.com'
+  - '*.googleapis.com'
+  - 'gemini.google.com'
+
+  # Google
+  - 'google.com'
+  - 'mail.google.com'
+  - 'gmail.com'
+  - 'imap.gmail.com'
+  - 'smtp.gmail.com'
+  - 'pop.gmail.com'
+  - 'gmail.googleapis.com'
+  - 'mail-attachment.googleusercontent.com'
+  - 'googleusercontent.com'
+  - 'ssl.gstatic.com'
+  - 'gstatic.com'
+
+  # Apple
+  - 'appleid.apple.com'
+  - 'appleid.cdn-apple.com'
+  - 'idmsa.apple.com'
+  - 'gsa.apple.com'
+  - 'account.apple.com'
+  - 'icloud.com'
+  - 'icloud-content.com'
+  - 'apple-cloudkit.com'
+  - 'apple.com'
+
+  # Telegram
+  - 't.me'
+  - 'telegram.me'
+  - 'telegra.ph'
+  - 'telesco.pe'
+
+# Danh sách các dải IP sẽ đi qua Phone (Tethering)
+tether_cidrs:
+  # Telegram CIDRs (More reliable than domain resolution)
+  - '91.108.4.0/22'
+  - '91.108.8.0/22'
+  - '91.108.12.0/22'
+  - '91.108.16.0/22'
+  - '91.108.20.0/22'
+  - '91.108.56.0/22'
+  - '91.105.192.0/23'
+  - '149.154.160.0/20'
+  - '185.76.151.0/24'
+# Tên interface (Optional - nếu để trống chương trình sẽ tự detect)
+# wifi_interface_name: "en0"
+# phone_interface_name: "en8"
