@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+	<dict>
+		<key>Label</key>
+		<string>com.bez.network-router.tray</string>
+
+		<key>ProgramArguments</key>
+		<array>
+			<string>/usr/local/bin/network-router</string>
+			<string>tray</string>
+		</array>
+
+		<key>RunAtLoad</key>
+		<true />
+
+		<key>KeepAlive</key>
+		<dict>
+			<key>SuccessfulExit</key>
+			<false />
+		</dict>
+
+		<key>LimitLoadToSessionType</key>
+		<string>Aqua</string>
+
+		<key>ProcessType</key>
+		<string>Interactive</string>
+
+		<key>StandardErrorPath</key>
+		<string>/tmp/network-router-tray.err</string>
+
+		<key>StandardOutPath</key>
+		<string>/tmp/network-router-tray.log</string>
+	</dict>
+</plist>

@@ -1,0 +1,24 @@
+# Binaries
+network-router
+build*/
+*.exe
+*.dll
+vendor/
+
+# Config (optional, if you want to keep local config private)
+# config.yaml
+# config.json
+
+# IDEs
+.vscode/*
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+!.vscode/extensions.json
+*.code-workspace
+.idea/
+*.swp
+
+# OS cache files
+.DS_Store
+.resolved_ips.yaml
