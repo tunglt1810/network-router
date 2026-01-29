@@ -7,13 +7,13 @@ import (
 
 // RouterState manages the daemon state
 type RouterState struct {
-	mu               sync.RWMutex
+	mu                 sync.RWMutex
 	autoRoutingEnabled bool
-	routesApplied    bool
-	wifiActive       bool
-	phoneActive      bool
-	lastAppliedAt    time.Time
-	lastClearedAt    time.Time
+	routesApplied      bool
+	wifiActive         bool
+	phoneActive        bool
+	lastAppliedAt      time.Time
+	lastClearedAt      time.Time
 }
 
 // NewRouterState creates a new RouterState

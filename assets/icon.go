@@ -4,26 +4,26 @@ import (
 	_ "embed"
 )
 
-//go:embed icon_active.svg
-var iconActiveSVG []byte
+//go:embed icon_active.png
+var iconActive []byte
 
-//go:embed icon_inactive.svg
-var iconInactiveSVG []byte
+//go:embed icon_inactive.png
+var iconInactive []byte
 
-//go:embed icon_error.svg
-var iconErrorSVG []byte
+//go:embed icon_error.png
+var iconError []byte
 
 // IconActive returns a green icon for active state
 func IconActive() []byte {
-	return iconActiveSVG
+	return iconActive
 }
 
 // IconInactive returns a gray icon for inactive state
 func IconInactive() []byte {
-	return iconInactiveSVG
+	return iconInactive
 }
 
 // IconError returns a red icon for error state
 func IconError() []byte {
-	return iconErrorSVG
+	return iconError
 }
