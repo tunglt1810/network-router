@@ -4,6 +4,7 @@ import (
 	"context"
 	"log"
 	"network-router/pkg/core"
+	"os"
 	"time"
 
 	"github.com/robfig/cron/v3"
@@ -15,6 +16,9 @@ type Monitor struct {
 	state         *RouterState
 	config        *core.Config
 	checkInterval time.Duration
+	cron             *cron.Cron
+	persistentCron   *cron.Cron
+	refreshCh        chan bool
 }
 
 // NewMonitor creates a new network monitor
@@ -23,6 +27,7 @@ func NewMonitor(config *core.Config, state *RouterState) *Monitor {
 		config:        config,
 		state:         state,
 		checkInterval: 5 * time.Second, // Check every 5 seconds
+		refreshCh:     make(chan bool, 1),
 	}
 }
 
@@ -38,22 +43,9 @@ func (m *Monitor) Start(ctx context.Context) error {
 		log.Printf("Initial routing check error: %v", err)
 	}
 
-	// Setup Cron for scheduled refresh
-	refreshCh := make(chan bool)
-	if m.config.RouteRefreshCron != "" {
-		c := cron.New()
-		_, err := c.AddFunc(m.config.RouteRefreshCron, func() {
-			log.Println("⏰ Scheduled route refresh triggered via cron")
-			refreshCh <- true
-		})
-		if err != nil {
-			log.Printf("Error scheduling refresh cron '%s': %v", m.config.RouteRefreshCron, err)
-		} else {
-			c.Start()
-			defer c.Stop()
-			log.Printf("Route refresh scheduled with cron: %s", m.config.RouteRefreshCron)
-		}
-	}
+	defer m.stopRefreshCron()
+	m.startPersistentCron()
+	defer m.stopPersistentCron()
 
 	for {
 		select {
@@ -64,7 +56,7 @@ func (m *Monitor) Start(ctx context.Context) error {
 			if err := m.checkAndApplyRouting(); err != nil {
 				log.Printf("Routing check error: %v", err)
 			}
-		case <-refreshCh:
+		case <-m.refreshCh:
 			m.performRefresh()
 		}
 	}
@@ -80,12 +72,13 @@ func (m *Monitor) performRefresh() {
 		return
 	}
 
-	// 1. Clear existing routes
+	// 1. Clear existing routes and stop cron
 	if m.router != nil {
 		if err := m.router.ClearRoutes(); err != nil {
 			log.Printf("Warning during clear routes: %v", err)
 		}
 	}
+	m.stopRefreshCron()
 
 	// 2. Mark as not applied to force re-application
 	m.state.SetRoutesApplied(false)
@@ -96,6 +89,7 @@ func (m *Monitor) performRefresh() {
 		log.Printf("Error re-applying routes after refresh: %v", err)
 	} else {
 		log.Println("✓ Routing refresh completed successfully")
+		// startRefreshCron is called inside checkAndApplyRouting if it succeeds
 	}
 }
 
@@ -138,6 +132,7 @@ func (m *Monitor) checkAndApplyRouting() error {
 
 		m.state.SetRoutesApplied(true)
 		log.Println("✓ Routes automatically applied")
+		m.startRefreshCron()
 	}
 
 	// Clear routes if either interface is down and routes are applied
@@ -155,6 +150,7 @@ func (m *Monitor) checkAndApplyRouting() error {
 
 		m.state.SetRoutesApplied(false)
 		log.Println("✓ Routes automatically cleared")
+		m.stopRefreshCron()
 	}
 
 	return nil
@@ -177,6 +173,7 @@ func (m *Monitor) ForceApply() error {
 
 	m.router = router
 	m.state.SetRoutesApplied(true)
+	m.startRefreshCron()
 
 	wifiActive, phoneActive := router.GetInterfaceStatus()
 	m.state.UpdateInterfaceStatus(wifiActive, phoneActive)
@@ -189,9 +186,9 @@ func (m *Monitor) ForceApply() error {
 func (m *Monitor) ForceClear() error {
 	// Auto-stop routing if enabled
 	if m.state.IsAutoRoutingEnabled() {
-		log.Println("⚠ Auto-routing is enabled. Disabling to prevent automatic re-application...")
+		log.Println("✓ Auto-routing is enabled. Disabling to prevent automatic re-application...")
 		m.state.SetAutoRouting(false)
-		log.Println("✓ Auto-routing disabled")
+		log.Println("⚠ Auto-routing disabled")
 	}
 
 	if m.router == nil {
@@ -208,6 +205,7 @@ func (m *Monitor) ForceClear() error {
 	}
 
 	m.state.SetRoutesApplied(false)
+	m.stopRefreshCron()
 	return nil
 }
 
@@ -238,5 +236,79 @@ func (m *Monitor) RefreshRoutes() {
 		log.Printf("Error during route refresh application: %v", err)
 	} else {
 		log.Println("✓ Routes refreshed successfully")
+		m.startRefreshCron()
+	}
+}
+
+// startRefreshCron starts the scheduled refresh cronjob if configured
+func (m *Monitor) startRefreshCron() {
+	if m.config.RouteRefreshCron == "" {
+		return
+	}
+
+	if m.cron != nil {
+		return // Already running
+	}
+
+	c := cron.New()
+	_, err := c.AddFunc(m.config.RouteRefreshCron, func() {
+		log.Println("⏰ Scheduled route refresh triggered via cron")
+		select {
+		case m.refreshCh <- true:
+		default:
+			// Channel full, skip trigger
+		}
+	})
+
+	if err != nil {
+		log.Printf("Error scheduling refresh cron '%s': %v", m.config.RouteRefreshCron, err)
+		return
+	}
+
+	m.cron = c
+	c.Start()
+	log.Printf("Route refresh scheduled with cron: %s", m.config.RouteRefreshCron)
+}
+
+// stopRefreshCron stops the scheduled refresh cronjob
+func (m *Monitor) stopRefreshCron() {
+	if m.cron != nil {
+		log.Println("Stopping scheduled refresh cronjob...")
+		m.cron.Stop()
+		m.cron = nil
+	}
+}
+
+// startPersistentCron starts the persistent background tasks
+func (m *Monitor) startPersistentCron() {
+	if m.persistentCron != nil {
+		return
+	}
+
+	m.persistentCron = cron.New()
+
+	// Clear log file at 10:00 AM every day
+	_, err := m.persistentCron.AddFunc("0 10 * * *", func() {
+		log.Println("⏰ Scheduled log cleanup: Truncating /var/log/network-router.log")
+		if err := os.Truncate("/var/log/network-router.log", 0); err != nil {
+			log.Printf("Error truncating log file: %v", err)
+		}
+	})
+
+	if err != nil {
+		log.Printf("Error scheduling persistent cron: %v", err)
+		return
+	}
+
+	m.persistentCron.Start()
+	log.Println("Persistent cronjob started (Log cleanup scheduled at 10:00 AM)")
+}
+
+// stopPersistentCron stops the persistent background tasks
+func (m *Monitor) stopPersistentCron() {
+	if m.persistentCron != nil {
+		log.Println("Stopping persistent cronjob...")
+		m.persistentCron.Stop()
+		m.persistentCron = nil
 	}
 }
