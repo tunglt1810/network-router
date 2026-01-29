@@ -56,6 +56,8 @@ uninstall:
 	@echo "Uninstalling service..."
 	sudo ./uninstall_service.sh
 
+reinstall: uninstall install
+
 # Legacy commands (for backward compatibility)
 start-routing: build
 	@echo "Running..."

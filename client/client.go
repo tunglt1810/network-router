@@ -40,7 +40,7 @@ func NewClient() *Client {
 func (c *Client) SendRequest(action string, params map[string]interface{}) (*IPCResponse, error) {
 	// Use longer timeout for restart command as it involves clearing + applying
 	timeout := c.timeout
-	if action == "restart" || action == "apply" {
+	if action == "restart" || action == "apply" || action == "refresh" {
 		timeout = 120 * time.Second
 	}
 
