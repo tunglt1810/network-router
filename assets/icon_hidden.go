@@ -12,7 +12,7 @@ func IconHidden() []byte {
 	// Create a 1x1 transparent image
 	img := image.NewRGBA(image.Rect(0, 0, 1, 1))
 	img.Set(0, 0, color.RGBA{R: 0, G: 0, B: 0, A: 0})
-	
+
 	// Encode to PNG
 	var buf bytes.Buffer
 	png.Encode(&buf, img)

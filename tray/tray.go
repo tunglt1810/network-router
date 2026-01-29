@@ -47,23 +47,23 @@ func (t *TrayApp) onReady() {
 	t.updateIcon(false, false)
 
 	// Create menu items
-	t.mStatus = systray.AddMenuItem("Network Router - Status: Checking...", "Current daemon status")
+	t.mStatus = systray.AddMenuItem("📊 Network Router - Status: Checking...", "Current daemon status")
 	t.mStatus.Disable()
 
 	systray.AddSeparator()
 
-	t.mToggle = systray.AddMenuItem("Enable Auto-Routing", "Toggle auto-routing")
-	t.mApply = systray.AddMenuItem("Apply Routes", "Force apply routes now")
-	t.mRefresh = systray.AddMenuItem("Refresh Routes", "Re-resolve IPs and re-apply")
-	t.mClear = systray.AddMenuItem("Clear Routes", "Remove all routes")
+	t.mToggle = systray.AddMenuItem("🤖 Enable Auto-Routing", "Toggle auto-routing")
+	t.mApply = systray.AddMenuItem("⚡ Apply Routes", "Force apply routes now")
+	t.mRefresh = systray.AddMenuItem("🔄 Refresh Routes", "Re-resolve IPs and re-apply")
+	t.mClear = systray.AddMenuItem("🗑️ Clear Routes", "Remove all routes")
 
 	systray.AddSeparator()
 
-	t.mHideIcon = systray.AddMenuItem("Hide Icon", "Hide tray icon (show with Cmd+Opt+Shift+R)")
+	t.mHideIcon = systray.AddMenuItem("🕶️ Hide Icon", "Hide tray icon (show with Cmd+Opt+Shift+R)")
 
 	systray.AddSeparator()
 
-	t.mQuit = systray.AddMenuItem("Quit", "Exit the application")
+	t.mQuit = systray.AddMenuItem("🚪 Quit", "Exit the application")
 
 	// Start status polling
 	go t.pollStatus()
@@ -96,7 +96,7 @@ func (t *TrayApp) updateStatus() {
 	if err != nil {
 		t.lastStatus = nil
 		t.updateIcon(false, true)
-		t.mStatus.SetTitle("Network Router - Status: Disconnected")
+		t.mStatus.SetTitle("📊 Network Router - Status: Disconnected")
 		t.mStatus.SetTooltip(fmt.Sprintf("Error: %v", err))
 		t.mToggle.Disable()
 		t.mApply.Disable()
@@ -109,7 +109,7 @@ func (t *TrayApp) updateStatus() {
 
 	if !resp.Success || resp.Data == nil {
 		t.updateIcon(false, true)
-		t.mStatus.SetTitle("Network Router - Status: Error")
+		t.mStatus.SetTitle("📊 Network Router - Status: Error")
 		return
 	}
 
@@ -136,7 +136,7 @@ func (t *TrayApp) updateStatus() {
 	t.updateIcon(autoRouting && routesApplied, false)
 
 	// Update status text with "Network Router" prefix
-	statusText := fmt.Sprintf("Network Router - Auto: %v | Routes: %v",
+	statusText := fmt.Sprintf("📊 Network Router - Auto: %v | Routes: %v",
 		formatBool(autoRouting), formatBool(routesApplied))
 	tooltip := fmt.Sprintf("WiFi: %v | Phone: %v",
 		formatBool(wifiActive), formatBool(phoneActive))
@@ -146,9 +146,9 @@ func (t *TrayApp) updateStatus() {
 
 	// Update toggle button
 	if autoRouting {
-		t.mToggle.SetTitle("Disable Auto-Routing")
+		t.mToggle.SetTitle("🤖 Disable Auto-Routing")
 	} else {
-		t.mToggle.SetTitle("Enable Auto-Routing")
+		t.mToggle.SetTitle("🤖 Enable Auto-Routing")
 	}
 
 	// Enable all controls when connected
@@ -267,7 +267,7 @@ func (t *TrayApp) handleHideIcon() {
 	if t.iconHidden {
 		// Hide icon by setting it to a transparent 1x1 pixel
 		systray.SetIcon(assets.IconHidden())
-		t.mHideIcon.SetTitle("Show Icon")
+		t.mHideIcon.SetTitle("🕶️ Show Icon")
 		t.mHideIcon.SetTooltip("Show tray icon")
 		log.Println("Icon hidden - use menu or hotkey to show")
 	} else {
@@ -285,7 +285,7 @@ func (t *TrayApp) handleHideIcon() {
 		} else {
 			t.updateIcon(false, false)
 		}
-		t.mHideIcon.SetTitle("Hide Icon")
+		t.mHideIcon.SetTitle("🕶️ Hide Icon")
 		t.mHideIcon.SetTooltip("Hide tray icon (show with Cmd+Opt+Shift+R)")
 		log.Println("Icon shown")
 	}

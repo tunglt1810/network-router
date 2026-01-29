@@ -350,4 +350,4 @@ echo "✅ Uninstall completed."
 
 ## License
 
-MIT License - Xem file LICENSE để biết chi tiết.
+Apache License 2.0 — See `LICENSE` for details.

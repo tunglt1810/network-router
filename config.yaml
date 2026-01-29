@@ -8,6 +8,7 @@ route_refresh_cron: '*/30 * * * *'
 # Danh sách các domain routing qua Phone (Tethering)
 # Wildcard được hỗ trợ ví dụ: *.internal.com
 tether_domains:
+  - 'github.com'
   # Github Copilot
   # Authentication domains (critical for agent mode)
   - 'vscode-auth.github.com'
@@ -30,7 +31,6 @@ tether_domains:
   # Authentication domains (critical for OAuth)
   - 'accounts.google.com'
   - 'oauth2.googleapis.com'
-  - '*.clients0.google.com'
   - '*.clients1.google.com'
   - '*.clients2.google.com'
   - '*.clients3.google.com'
