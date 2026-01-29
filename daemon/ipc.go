@@ -104,7 +104,9 @@ func (s *IPCServer) handleConnection(conn net.Conn) {
 		return
 	}
 
-	log.Printf("IPC request: %s", req.Action)
+	if req.Action != "status" {
+		log.Printf("IPC request: %s", req.Action)
+	}
 
 	response := s.processRequest(req)
 	s.sendResponse(conn, response)
