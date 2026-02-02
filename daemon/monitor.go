@@ -74,7 +74,17 @@ func (m *Monitor) performRefresh() {
 		return
 	}
 
-	// 1. Clear existing routes and stop cron
+	// 1. Stop DNS Proxy FIRST to release port
+	if m.dnsProxy != nil {
+		log.Println("Stopping DNS Proxy for refresh...")
+		if err := m.dnsProxy.Stop(); err != nil {
+			log.Printf("Warning stopping DNS proxy: %v", err)
+		}
+		// Critical: Give OS time to release the port
+		time.Sleep(1 * time.Second)
+	}
+
+	// 2. Clear existing routes and stop cron
 	if m.Router != nil {
 		if err := m.Router.ClearRoutes(); err != nil {
 			log.Printf("Warning during clear routes: %v", err)
@@ -82,11 +92,11 @@ func (m *Monitor) performRefresh() {
 	}
 	m.stopRefreshCron()
 
-	// 2. Mark as not applied to force re-application
+	// 3. Mark as not applied to force re-application
 	m.state.SetRoutesApplied(false)
 	m.Router = nil
 
-	// 3. Immediately trigger re-check/apply
+	// 4. Immediately trigger re-check/apply
 	if err := m.checkAndApplyRouting(); err != nil {
 		log.Printf("Error re-applying routes after refresh: %v", err)
 	} else {
@@ -260,32 +270,12 @@ func (m *Monitor) ForceClear() error {
 
 // RefreshRoutes performs a scheduled refresh of routing rules
 func (m *Monitor) RefreshRoutes() {
-	log.Println("↻ Scheduled Refresh: Recalculating routes...")
-
-	// We only refresh if routes are currently applied
-	if !m.state.AreRoutesApplied() {
-		log.Println("Skipping refresh: Routes are not currently applied.")
-		return
-	}
-
-	// 1. Clear existing routes to remove stale IPs
-	log.Println("stop current routing...")
-	if m.Router != nil {
-		if err := m.Router.ClearRoutes(); err != nil {
-			log.Printf("Warning during refresh cleanup: %v", err)
-		}
-	}
-
-	// Reset state so checkAndApplyRouting can re-apply
-	m.state.SetRoutesApplied(false)
-
-	// 2. Re-apply routes (this will resolve DNS again)
-	log.Println("re-applying routing...")
-	if err := m.checkAndApplyRouting(); err != nil {
-		log.Printf("Error during route refresh application: %v", err)
-	} else {
-		log.Println("✓ Routes refreshed successfully")
-		m.startRefreshCron()
+	log.Println("↻ Queueing route refresh...")
+	select {
+	case m.refreshCh <- true:
+		// Triggered successfully
+	default:
+		log.Println("Refresh already queued/running, skipping duplicate request")
 	}
 }
 
