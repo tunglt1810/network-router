@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"net"
+	"network-router/pkg/core"
 	"os"
 )
 
@@ -28,14 +29,16 @@ type IPCResponse struct {
 type IPCServer struct {
 	monitor  *Monitor
 	state    *RouterState
+	dnsProxy *core.DNSProxy
 	listener net.Listener
 }
 
 // NewIPCServer creates a new IPC server
-func NewIPCServer(monitor *Monitor, state *RouterState) *IPCServer {
+func NewIPCServer(monitor *Monitor, state *RouterState, dnsProxy *core.DNSProxy) *IPCServer {
 	return &IPCServer{
-		monitor: monitor,
-		state:   state,
+		monitor:  monitor,
+		state:    state,
+		dnsProxy: dnsProxy,
 	}
 }
 
@@ -123,6 +126,7 @@ func (s *IPCServer) processRequest(req IPCRequest) IPCResponse {
 
 	case "enable":
 		s.state.SetAutoRouting(true)
+		// DNS Proxy lifecycle is now managed by Monitor based on routing status
 		return IPCResponse{
 			Success: true,
 			Message: "Auto-routing enabled",
@@ -130,6 +134,7 @@ func (s *IPCServer) processRequest(req IPCRequest) IPCResponse {
 
 	case "disable":
 		s.state.SetAutoRouting(false)
+		// DNS Proxy lifecycle is now managed by Monitor based on routing status
 		return IPCResponse{
 			Success: true,
 			Message: "Auto-routing disabled",
@@ -187,6 +192,44 @@ func (s *IPCServer) processRequest(req IPCRequest) IPCResponse {
 		return IPCResponse{
 			Success: true,
 			Message: "Refresh triggered",
+		}
+
+	case "enable_dns_proxy":
+		if s.dnsProxy != nil {
+			if err := s.dnsProxy.Start(); err != nil {
+				return IPCResponse{
+					Success: false,
+					Message: fmt.Sprintf("Failed to start DNS Proxy: %v", err),
+				}
+			}
+			s.state.SetDNSProxyEnabled(true)
+			return IPCResponse{
+				Success: true,
+				Message: "DNS Proxy enabled",
+			}
+		}
+		return IPCResponse{
+			Success: false,
+			Message: "DNS Proxy not initialized",
+		}
+
+	case "disable_dns_proxy":
+		if s.dnsProxy != nil {
+			if err := s.dnsProxy.Stop(); err != nil {
+				return IPCResponse{
+					Success: false,
+					Message: fmt.Sprintf("Failed to stop DNS Proxy: %v", err),
+				}
+			}
+			s.state.SetDNSProxyEnabled(false)
+			return IPCResponse{
+				Success: true,
+				Message: "DNS Proxy disabled",
+			}
+		}
+		return IPCResponse{
+			Success: false,
+			Message: "DNS Proxy not initialized",
 		}
 
 	default:

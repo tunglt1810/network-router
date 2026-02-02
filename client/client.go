@@ -98,6 +98,7 @@ func (c *Client) Status() error {
 		if lastCleared, ok := data["last_cleared_at"].(string); ok && lastCleared != "" {
 			fmt.Printf("Last cleared:     %s\n", lastCleared)
 		}
+		fmt.Printf("DNS Proxy:        %v\n", data["dns_proxy_enabled"])
 	}
 
 	return nil
@@ -178,5 +179,35 @@ func (c *Client) Restart() error {
 	}
 
 	fmt.Println("✓", resp.Message)
+	return nil
+}
+
+// EnableDNSProxy enables the DNS proxy
+func (c *Client) EnableDNSProxy() error {
+	resp, err := c.SendRequest("enable_dns_proxy", nil)
+	if err != nil {
+		return err
+	}
+
+	if !resp.Success {
+		return fmt.Errorf("enable_dns_proxy request failed: %s", resp.Message)
+	}
+
+	fmt.Println("✓ DNS Proxy enabled")
+	return nil
+}
+
+// DisableDNSProxy disables the DNS proxy
+func (c *Client) DisableDNSProxy() error {
+	resp, err := c.SendRequest("disable_dns_proxy", nil)
+	if err != nil {
+		return err
+	}
+
+	if !resp.Success {
+		return fmt.Errorf("disable_dns_proxy request failed: %s", resp.Message)
+	}
+
+	fmt.Println("✓ DNS Proxy disabled")
 	return nil
 }

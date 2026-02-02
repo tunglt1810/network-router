@@ -14,6 +14,7 @@ type RouterState struct {
 	phoneActive        bool
 	lastAppliedAt      time.Time
 	lastClearedAt      time.Time
+	dnsProxyEnabled    bool
 }
 
 // NewRouterState creates a new RouterState
@@ -35,6 +36,20 @@ func (s *RouterState) SetAutoRouting(enabled bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.autoRoutingEnabled = enabled
+}
+
+// IsDNSProxyEnabled returns if DNS proxy is enabled
+func (s *RouterState) IsDNSProxyEnabled() bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.dnsProxyEnabled
+}
+
+// SetDNSProxyEnabled enables or disables DNS proxy status
+func (s *RouterState) SetDNSProxyEnabled(enabled bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.dnsProxyEnabled = enabled
 }
 
 // AreRoutesApplied returns if routes are currently applied
@@ -90,5 +105,6 @@ func (s *RouterState) GetStatus() map[string]interface{} {
 		"phone_active":         s.phoneActive,
 		"last_applied_at":      s.lastAppliedAt,
 		"last_cleared_at":      s.lastClearedAt,
+		"dns_proxy_enabled":    s.dnsProxyEnabled,
 	}
 }
