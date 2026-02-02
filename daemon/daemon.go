@@ -17,6 +17,7 @@ type Daemon struct {
 	state     *RouterState
 	monitor   *Monitor
 	ipcServer *IPCServer
+	dnsProxy  *core.DNSProxy
 }
 
 // NewDaemon creates a new daemon instance
@@ -27,14 +28,25 @@ func NewDaemon(configPath string) (*Daemon, error) {
 	}
 
 	state := NewRouterState()
-	monitor := NewMonitor(config, state)
-	ipcServer := NewIPCServer(monitor, state)
+
+	monitor := NewMonitor(config, state, nil) // Temporarily nil
+	
+	dnsProxy := core.NewDNSProxy(config, func() *core.Router {
+		return monitor.Router
+	})
+	
+	monitor.dnsProxy = dnsProxy // Assign back to monitor
+	ipcServer := NewIPCServer(monitor, state, dnsProxy)
+
+	// Sync initial DNS proxy state from config
+	state.SetDNSProxyEnabled(config.DNSProxyEnabled)
 
 	return &Daemon{
 		config:    config,
 		state:     state,
 		monitor:   monitor,
 		ipcServer: ipcServer,
+		dnsProxy:  dnsProxy,
 	}, nil
 }
 
@@ -61,6 +73,10 @@ func (d *Daemon) Run() error {
 	g.Go(func() error {
 		return d.handleSignals(gCtx, cancel)
 	})
+
+	// Start DNS Proxy if enabled
+	// MOVED TO MONITOR: Monitor will decide when to start DNS Proxy based on routing status
+	log.Printf("DNS Proxy configured: Enabled=%v, Port=%d (Managed by Monitor)", d.config.DNSProxyEnabled, d.config.DNSProxyPort)
 
 	log.Println("✓ Daemon started successfully")
 
@@ -100,13 +116,10 @@ func (d *Daemon) handleSignals(ctx context.Context, cancel context.CancelFunc) e
 
 // cleanup performs cleanup operations before shutdown
 func (d *Daemon) cleanup() error {
-	// Clear routes if they are applied
-	if d.state.AreRoutesApplied() {
-		log.Println("Clearing routes before shutdown...")
-		if err := d.monitor.ForceClear(); err != nil {
-			return err
-		}
-		log.Println("✓ Routes cleared")
+	// Stop DNS Proxy
+	if d.dnsProxy != nil {
+		d.dnsProxy.Stop()
 	}
+
 	return nil
 }

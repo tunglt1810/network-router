@@ -43,6 +43,10 @@ func main() {
 		runClientCommand("clear")
 	case "restart":
 		runClientCommand("restart")
+	case "enable-dns":
+		runClientCommand("enable-dns")
+	case "disable-dns":
+		runClientCommand("disable-dns")
 	case "help", "-h", "--help":
 		printUsage()
 	default:
@@ -90,6 +94,10 @@ func runClientCommand(command string) {
 		err = c.Clear()
 	case "restart":
 		err = c.Restart()
+	case "enable-dns":
+		err = c.EnableDNSProxy()
+	case "disable-dns":
+		err = c.DisableDNSProxy()
 	}
 
 	if err != nil {
@@ -116,6 +124,8 @@ func printUsage() {
 	fmt.Println("  apply               Force apply routes now")
 	fmt.Println("  clear               Force clear routes now")
 	fmt.Println("  restart             Clear and re-apply routes")
+	fmt.Println("  enable-dns          Enable DNS Proxy")
+	fmt.Println("  disable-dns         Disable DNS Proxy")
 	fmt.Println("  help                Show this help message")
 	fmt.Println()
 	fmt.Println("Examples:")

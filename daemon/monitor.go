@@ -12,20 +12,22 @@ import (
 
 // Monitor watches for network interface changes
 type Monitor struct {
-	router        *core.Router
+	Router        *core.Router
 	state         *RouterState
 	config        *core.Config
 	checkInterval time.Duration
 	cron             *cron.Cron
 	persistentCron   *cron.Cron
 	refreshCh        chan bool
+	dnsProxy         *core.DNSProxy
 }
 
 // NewMonitor creates a new network monitor
-func NewMonitor(config *core.Config, state *RouterState) *Monitor {
+func NewMonitor(config *core.Config, state *RouterState, dnsProxy *core.DNSProxy) *Monitor {
 	return &Monitor{
 		config:        config,
 		state:         state,
+		dnsProxy:      dnsProxy,
 		checkInterval: 5 * time.Second, // Check every 5 seconds
 		refreshCh:     make(chan bool, 1),
 	}
@@ -73,8 +75,8 @@ func (m *Monitor) performRefresh() {
 	}
 
 	// 1. Clear existing routes and stop cron
-	if m.router != nil {
-		if err := m.router.ClearRoutes(); err != nil {
+	if m.Router != nil {
+		if err := m.Router.ClearRoutes(); err != nil {
 			log.Printf("Warning during clear routes: %v", err)
 		}
 	}
@@ -82,7 +84,7 @@ func (m *Monitor) performRefresh() {
 
 	// 2. Mark as not applied to force re-application
 	m.state.SetRoutesApplied(false)
-	m.router = nil
+	m.Router = nil
 
 	// 3. Immediately trigger re-check/apply
 	if err := m.checkAndApplyRouting(); err != nil {
@@ -114,6 +116,13 @@ func (m *Monitor) checkAndApplyRouting() error {
 
 	// Check if we should take action
 	if !m.state.IsAutoRoutingEnabled() {
+		// If auto-routing is disabled but routes are currently applied, we must clear them
+		if m.state.AreRoutesApplied() {
+			log.Println("Auto-routing disabled, clearing existing routes...")
+			if err := m.ForceClear(); err != nil {
+				log.Printf("Error clearing routes after disable: %v", err)
+			}
+		}
 		return nil
 	}
 
@@ -123,15 +132,25 @@ func (m *Monitor) checkAndApplyRouting() error {
 	// Apply routes if both interfaces are active and routes not applied
 	if bothActive && !routesApplied {
 		log.Println("Both interfaces detected, applying routes...")
-		m.router = router
+		m.Router = router
 
-		if err := m.router.ApplyRoutes(); err != nil {
+		if err := m.Router.ApplyRoutes(); err != nil {
 			log.Printf("Error applying routes: %v", err)
 			return err
 		}
 
 		m.state.SetRoutesApplied(true)
 		log.Println("✓ Routes automatically applied")
+		
+		// Start DNS Proxy if enabled
+		if m.dnsProxy != nil {
+			if err := m.dnsProxy.Start(); err != nil {
+				log.Printf("Warning: Failed to auto-start DNS Proxy: %v", err)
+			} else {
+				m.state.SetDNSProxyEnabled(true)
+			}
+		}
+		
 		m.startRefreshCron()
 	}
 
@@ -139,17 +158,27 @@ func (m *Monitor) checkAndApplyRouting() error {
 	if !bothActive && routesApplied {
 		log.Println("Interface(s) lost, clearing routes...")
 
-		if m.router == nil {
-			m.router = router
+		if m.Router == nil {
+			m.Router = router
 		}
 
-		if err := m.router.ClearRoutes(); err != nil {
+		if err := m.Router.ClearRoutes(); err != nil {
 			log.Printf("Error clearing routes: %v", err)
 			return err
 		}
 
 		m.state.SetRoutesApplied(false)
 		log.Println("✓ Routes automatically cleared")
+		
+		// Stop DNS Proxy
+		if m.dnsProxy != nil {
+			if err := m.dnsProxy.Stop(); err != nil {
+				log.Printf("Warning: Failed to auto-stop DNS Proxy: %v", err)
+			} else {
+				m.state.SetDNSProxyEnabled(false)
+			}
+		}
+		
 		m.stopRefreshCron()
 	}
 
@@ -171,8 +200,18 @@ func (m *Monitor) ForceApply() error {
 		return err
 	}
 
-	m.router = router
+	m.Router = router
 	m.state.SetRoutesApplied(true)
+	
+	// Start DNS Proxy
+	if m.dnsProxy != nil {
+		if err := m.dnsProxy.Start(); err != nil {
+			log.Printf("Warning: Failed to force start DNS Proxy: %v", err)
+		} else {
+			m.state.SetDNSProxyEnabled(true)
+		}
+	}
+	
 	m.startRefreshCron()
 
 	wifiActive, phoneActive := router.GetInterfaceStatus()
@@ -191,20 +230,30 @@ func (m *Monitor) ForceClear() error {
 		log.Println("⚠ Auto-routing disabled")
 	}
 
-	if m.router == nil {
+	if m.Router == nil {
 		router, err := core.NewRouter(m.config)
 		if err != nil {
 			return err
 		}
-		m.router = router
-		_ = m.router.DetectInterfaces() // Best effort
+		m.Router = router
+		_ = m.Router.DetectInterfaces() // Best effort
 	}
 
-	if err := m.router.ClearRoutes(); err != nil {
+	if err := m.Router.ClearRoutes(); err != nil {
 		return err
 	}
 
 	m.state.SetRoutesApplied(false)
+	
+	// Stop DNS Proxy
+	if m.dnsProxy != nil {
+		if err := m.dnsProxy.Stop(); err != nil {
+			log.Printf("Warning: Failed to force stop DNS Proxy: %v", err)
+		} else {
+			m.state.SetDNSProxyEnabled(false)
+		}
+	}
+	
 	m.stopRefreshCron()
 	return nil
 }
@@ -221,8 +270,8 @@ func (m *Monitor) RefreshRoutes() {
 
 	// 1. Clear existing routes to remove stale IPs
 	log.Println("stop current routing...")
-	if m.router != nil {
-		if err := m.router.ClearRoutes(); err != nil {
+	if m.Router != nil {
+		if err := m.Router.ClearRoutes(); err != nil {
 			log.Printf("Warning during refresh cleanup: %v", err)
 		}
 	}

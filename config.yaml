@@ -56,6 +56,9 @@ tether_domains:
   - 'googleusercontent.com'
   - 'ssl.gstatic.com'
   - 'gstatic.com'
+  - '*.googlevideo.com'
+  - 'music.youtube.com'
+  - 'youtube.com'
 
   # Apple
   - 'appleid.apple.com'
@@ -89,3 +92,7 @@ tether_cidrs:
 # Tên interface (Optional - nếu để trống chương trình sẽ tự detect)
 # wifi_interface_name: "en0"
 # phone_interface_name: "en8"
+
+# Cấu hình DNS Proxy để hỗ trợ Wildcard Domain
+dns_proxy_enabled: true
+dns_proxy_port: 5454

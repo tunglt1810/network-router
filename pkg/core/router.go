@@ -313,6 +313,31 @@ func (r *Router) ClearRoutes() error {
 	return nil
 }
 
+// AddDynamicRoute adds a route for a single IP dynamically (used by DNS Proxy)
+func (r *Router) AddDynamicRoute(ip string) error {
+	target := ip
+	if !isCIDR(target) {
+		target = ip + "/32"
+	}
+
+	// Check if already in resolvedIPs to avoid duplicate routes
+	for _, existingIP := range r.resolvedIPs {
+		if existingIP == ip {
+			return nil // Already routed
+		}
+	}
+
+	log.Printf("🚀 Dynamic Routing: Adding route for %s via Phone\n", target)
+	if err := r.addPhoneRoute(target); err != nil {
+		return err
+	}
+
+	r.resolvedIPs = append(r.resolvedIPs, ip)
+	
+	// Incrementally update the saved file
+	return r.saveResolvedIPs()
+}
+
 // Helper functions
 
 func (r *Router) addPhoneRoute(target string) error {

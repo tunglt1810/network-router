@@ -13,6 +13,9 @@ type Config struct {
 	WifiInterfaceKeyword  string   `yaml:"wifi_interface_name"`
 	PhoneInterfaceKeyword string   `yaml:"phone_interface_name"`
 	RouteRefreshCron      string   `yaml:"route_refresh_cron"` // Cron expression for scheduled refresh
+	DNSProxyEnabled       bool     `yaml:"dns_proxy_enabled"`
+	DNSProxyPort          int      `yaml:"dns_proxy_port"`
+	DNSUpstream           string   `yaml:"dns_upstream"`
 }
 
 // LoadConfig loads configuration from a YAML file
