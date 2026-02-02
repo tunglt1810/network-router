@@ -22,6 +22,7 @@ type TrayApp struct {
 	mApply     *systray.MenuItem
 	mRefresh   *systray.MenuItem
 	mClear     *systray.MenuItem
+	mDNSProxy  *systray.MenuItem
 	mHideIcon  *systray.MenuItem
 	mSeparator *systray.MenuItem
 	mQuit      *systray.MenuItem
@@ -56,6 +57,7 @@ func (t *TrayApp) onReady() {
 	t.mApply = systray.AddMenuItem("⚡ Apply Routes", "Force apply routes now")
 	t.mRefresh = systray.AddMenuItem("🔄 Refresh Routes", "Re-resolve IPs and re-apply")
 	t.mClear = systray.AddMenuItem("🗑️ Clear Routes", "Remove all routes")
+	t.mDNSProxy = systray.AddMenuItem("📡 Enable DNS Proxy", "Toggle DNS Proxy (for wildcard domains)")
 
 	systray.AddSeparator()
 
@@ -118,6 +120,7 @@ func (t *TrayApp) updateStatus() {
 	routesApplied := false
 	wifiActive := false
 	phoneActive := false
+	dnsProxyEnabled := false
 
 	if val, ok := resp.Data["auto_routing_enabled"].(bool); ok {
 		autoRouting = val
@@ -130,6 +133,9 @@ func (t *TrayApp) updateStatus() {
 	}
 	if val, ok := resp.Data["phone_active"].(bool); ok {
 		phoneActive = val
+	}
+	if val, ok := resp.Data["dns_proxy_enabled"].(bool); ok {
+		dnsProxyEnabled = val
 	}
 
 	// Update icon based on state
@@ -151,11 +157,19 @@ func (t *TrayApp) updateStatus() {
 		t.mToggle.SetTitle("🤖 Enable Auto-Routing")
 	}
 
+	// Update DNS Proxy button
+	if dnsProxyEnabled {
+		t.mDNSProxy.SetTitle("📡 Disable DNS Proxy")
+	} else {
+		t.mDNSProxy.SetTitle("📡 Enable DNS Proxy")
+	}
+
 	// Enable all controls when connected
 	t.mToggle.Enable()
 	t.mApply.Enable()
 	t.mRefresh.Enable()
 	t.mClear.Enable()
+	t.mDNSProxy.Enable()
 }
 
 // updateIcon updates the tray icon based on state
@@ -188,6 +202,8 @@ func (t *TrayApp) handleMenuClicks() {
 			t.handleRefresh()
 		case <-t.mClear.ClickedCh:
 			t.handleClear()
+		case <-t.mDNSProxy.ClickedCh:
+			t.handleDNSProxyToggle()
 		case <-t.mHideIcon.ClickedCh:
 			t.handleHideIcon()
 		case <-t.mQuit.ClickedCh:
@@ -256,6 +272,33 @@ func (t *TrayApp) handleClear() {
 		t.showNotification("Error", fmt.Sprintf("Failed to clear routes: %v", err))
 	} else {
 		t.showNotification("Success", "Routes cleared")
+		time.AfterFunc(500*time.Millisecond, t.updateStatus)
+	}
+}
+
+// handleDNSProxyToggle toggles DNS Proxy
+func (t *TrayApp) handleDNSProxyToggle() {
+	if t.lastStatus == nil || t.lastStatus.Data == nil {
+		return
+	}
+
+	dnsProxyEnabled := false
+	if val, ok := t.lastStatus.Data["dns_proxy_enabled"].(bool); ok {
+		dnsProxyEnabled = val
+	}
+
+	var err error
+	if dnsProxyEnabled {
+		_, err = t.client.SendRequest("disable_dns_proxy", nil)
+	} else {
+		_, err = t.client.SendRequest("enable_dns_proxy", nil)
+	}
+
+	if err != nil {
+		log.Printf("DNS Proxy toggle error: %v", err)
+		t.showNotification("Error", fmt.Sprintf("Failed to toggle DNS Proxy: %v", err))
+	} else {
+		// Immediately update status
 		time.AfterFunc(500*time.Millisecond, t.updateStatus)
 	}
 }
