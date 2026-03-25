@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"net"
 	"time"
+
+	"network-router/daemon"
 )
 
 const socketPath = "/tmp/network-router.sock"
@@ -17,9 +19,9 @@ type IPCRequest struct {
 
 // IPCResponse represents a server response
 type IPCResponse struct {
-	Success bool                   `json:"success"`
-	Message string                 `json:"message,omitempty"`
-	Data    map[string]interface{} `json:"data,omitempty"`
+	Success bool                 `json:"success"`
+	Message string               `json:"message,omitempty"`
+	Data    *daemon.RouterStatus `json:"data,omitempty"`
 }
 
 // Client handles communication with the daemon
@@ -40,7 +42,7 @@ func NewClient() *Client {
 func (c *Client) SendRequest(action string, params map[string]interface{}) (*IPCResponse, error) {
 	// Use longer timeout for restart command as it involves clearing + applying
 	timeout := c.timeout
-	if action == "restart" || action == "apply" || action == "refresh" {
+	if action == daemon.ActionRestart || action == daemon.ActionApply || action == daemon.ActionRefresh {
 		timeout = 120 * time.Second
 	}
 
@@ -74,7 +76,7 @@ func (c *Client) SendRequest(action string, params map[string]interface{}) (*IPC
 
 // Status gets the current daemon status
 func (c *Client) Status() error {
-	resp, err := c.SendRequest("status", nil)
+	resp, err := c.SendRequest(daemon.ActionStatus, nil)
 	if err != nil {
 		return err
 	}
@@ -87,18 +89,19 @@ func (c *Client) Status() error {
 	fmt.Println("================")
 
 	if data := resp.Data; data != nil {
-		fmt.Printf("Auto-routing:     %v\n", data["auto_routing_enabled"])
-		fmt.Printf("Routes applied:   %v\n", data["routes_applied"])
-		fmt.Printf("WiFi active:      %v\n", data["wifi_active"])
-		fmt.Printf("Phone active:     %v\n", data["phone_active"])
+		fmt.Printf("Auto-routing:     %v\n", data.AutoRoutingEnabled)
+		fmt.Printf("Routes applied:   %v\n", data.RoutesApplied)
+		fmt.Printf("WiFi active:      %v\n", data.WifiActive)
+		fmt.Printf("Phone active:     %v\n", data.PhoneActive)
 
-		if lastApplied, ok := data["last_applied_at"].(string); ok && lastApplied != "" {
-			fmt.Printf("Last applied:     %s\n", lastApplied)
+		if !data.LastAppliedAt.IsZero() {
+			fmt.Printf("Last applied:     %s\n", data.LastAppliedAt.Format(time.RFC3339))
 		}
-		if lastCleared, ok := data["last_cleared_at"].(string); ok && lastCleared != "" {
-			fmt.Printf("Last cleared:     %s\n", lastCleared)
+		if !data.LastClearedAt.IsZero() {
+			fmt.Printf("Last cleared:     %s\n", data.LastClearedAt.Format(time.RFC3339))
 		}
-		fmt.Printf("DNS Proxy:        %v\n", data["dns_proxy_enabled"])
+		fmt.Printf("DNS Proxy:        %v\n", data.DNSProxyEnabled)
+		fmt.Printf("Auto Refresh:     %v\n", data.AutoRefreshRouteEnabled)
 	}
 
 	return nil
@@ -106,7 +109,7 @@ func (c *Client) Status() error {
 
 // Enable enables auto-routing
 func (c *Client) Enable() error {
-	resp, err := c.SendRequest("enable", nil)
+	resp, err := c.SendRequest(daemon.ActionEnable, nil)
 	if err != nil {
 		return err
 	}
@@ -121,7 +124,7 @@ func (c *Client) Enable() error {
 
 // Disable disables auto-routing
 func (c *Client) Disable() error {
-	resp, err := c.SendRequest("disable", nil)
+	resp, err := c.SendRequest(daemon.ActionDisable, nil)
 	if err != nil {
 		return err
 	}
@@ -137,7 +140,7 @@ func (c *Client) Disable() error {
 // Apply forces route application
 func (c *Client) Apply() error {
 	fmt.Println("Applying routes...")
-	resp, err := c.SendRequest("apply", nil)
+	resp, err := c.SendRequest(daemon.ActionApply, nil)
 	if err != nil {
 		return err
 	}
@@ -153,7 +156,7 @@ func (c *Client) Apply() error {
 // Clear forces route clearing
 func (c *Client) Clear() error {
 	fmt.Println("Clearing routes...")
-	resp, err := c.SendRequest("clear", nil)
+	resp, err := c.SendRequest(daemon.ActionClear, nil)
 	if err != nil {
 		return err
 	}
@@ -169,7 +172,7 @@ func (c *Client) Clear() error {
 // Restart clears and re-applies routes
 func (c *Client) Restart() error {
 	fmt.Println("Restarting routes...")
-	resp, err := c.SendRequest("restart", nil)
+	resp, err := c.SendRequest(daemon.ActionRestart, nil)
 	if err != nil {
 		return err
 	}
@@ -184,7 +187,7 @@ func (c *Client) Restart() error {
 
 // EnableDNSProxy enables the DNS proxy
 func (c *Client) EnableDNSProxy() error {
-	resp, err := c.SendRequest("enable_dns_proxy", nil)
+	resp, err := c.SendRequest(daemon.ActionEnableDNSProxy, nil)
 	if err != nil {
 		return err
 	}
@@ -199,7 +202,7 @@ func (c *Client) EnableDNSProxy() error {
 
 // DisableDNSProxy disables the DNS proxy
 func (c *Client) DisableDNSProxy() error {
-	resp, err := c.SendRequest("disable_dns_proxy", nil)
+	resp, err := c.SendRequest(daemon.ActionDisableDNSProxy, nil)
 	if err != nil {
 		return err
 	}

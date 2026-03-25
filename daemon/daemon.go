@@ -3,10 +3,11 @@ package daemon
 import (
 	"context"
 	"log"
-	"network-router/pkg/core"
 	"os"
 	"os/signal"
 	"syscall"
+
+	"network-router/pkg/core"
 
 	"golang.org/x/sync/errgroup"
 )
@@ -30,16 +31,17 @@ func NewDaemon(configPath string) (*Daemon, error) {
 	state := NewRouterState()
 
 	monitor := NewMonitor(config, state, nil) // Temporarily nil
-	
+
 	dnsProxy := core.NewDNSProxy(config, func() *core.Router {
 		return monitor.Router
 	})
-	
+
 	monitor.dnsProxy = dnsProxy // Assign back to monitor
 	ipcServer := NewIPCServer(monitor, state, dnsProxy)
 
-	// Sync initial DNS proxy state from config
+	// Sync initial state from config
 	state.SetDNSProxyEnabled(config.DNSProxyEnabled)
+	state.SetAutoRefreshRouteEnabled(config.AutoRefreshRoute)
 
 	return &Daemon{
 		config:    config,

@@ -3,7 +3,8 @@
 # Tự động refresh routing theo lịch (Cron syntax)
 # Ví dụ: mỗi 30 phút ("*/30 * * * *") hoặc mỗi giờ ("0 * * * *")
 # Để trống để tắt tính năng này
-route_refresh_cron: '*/30 * * * *'
+route_refresh_cron: '0 * * * *'
+auto_refresh_route: false
 
 # Danh sách các domain routing qua Phone (Tethering)
 # Wildcard được hỗ trợ ví dụ: *.internal.com
@@ -43,6 +44,9 @@ tether_domains:
   - 'googleapis.com'
   - '*.googleapis.com'
   - 'gemini.google.com'
+  - 'codeassist.googleapis.com'
+  - 'cloudaicompanion.googleapis.com'
+  - 'aiplatform.googleapis.com'
 
   # Google
   - 'google.com'

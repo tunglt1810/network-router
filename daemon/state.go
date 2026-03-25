@@ -7,14 +7,15 @@ import (
 
 // RouterState manages the daemon state
 type RouterState struct {
-	mu                 sync.RWMutex
-	autoRoutingEnabled bool
-	routesApplied      bool
-	wifiActive         bool
-	phoneActive        bool
-	lastAppliedAt      time.Time
-	lastClearedAt      time.Time
-	dnsProxyEnabled    bool
+	mu                      sync.RWMutex
+	autoRoutingEnabled      bool
+	routesApplied           bool
+	wifiActive              bool
+	phoneActive             bool
+	lastAppliedAt           time.Time
+	lastClearedAt           time.Time
+	dnsProxyEnabled         bool
+	autoRefreshRouteEnabled bool
 }
 
 // NewRouterState creates a new RouterState
@@ -50,6 +51,20 @@ func (s *RouterState) SetDNSProxyEnabled(enabled bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.dnsProxyEnabled = enabled
+}
+
+// IsAutoRefreshRouteEnabled returns if auto-refresh route is enabled
+func (s *RouterState) IsAutoRefreshRouteEnabled() bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.autoRefreshRouteEnabled
+}
+
+// SetAutoRefreshRouteEnabled enables or disables auto-refresh route
+func (s *RouterState) SetAutoRefreshRouteEnabled(enabled bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.autoRefreshRouteEnabled = enabled
 }
 
 // AreRoutesApplied returns if routes are currently applied
@@ -93,18 +108,31 @@ func (s *RouterState) HasBothInterfaces() bool {
 	return s.wifiActive && s.phoneActive
 }
 
+// RouterStatus represents the current state of the router
+type RouterStatus struct {
+	AutoRoutingEnabled      bool      `json:"auto_routing_enabled"`
+	RoutesApplied           bool      `json:"routes_applied"`
+	WifiActive              bool      `json:"wifi_active"`
+	PhoneActive             bool      `json:"phone_active"`
+	LastAppliedAt           time.Time `json:"last_applied_at"`
+	LastClearedAt           time.Time `json:"last_cleared_at"`
+	DNSProxyEnabled         bool      `json:"dns_proxy_enabled"`
+	AutoRefreshRouteEnabled bool      `json:"auto_refresh_enabled"`
+}
+
 // GetStatus returns a status summary
-func (s *RouterState) GetStatus() map[string]interface{} {
+func (s *RouterState) GetStatus() *RouterStatus {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	return map[string]interface{}{
-		"auto_routing_enabled": s.autoRoutingEnabled,
-		"routes_applied":       s.routesApplied,
-		"wifi_active":          s.wifiActive,
-		"phone_active":         s.phoneActive,
-		"last_applied_at":      s.lastAppliedAt,
-		"last_cleared_at":      s.lastClearedAt,
-		"dns_proxy_enabled":    s.dnsProxyEnabled,
+	return &RouterStatus{
+		AutoRoutingEnabled:      s.autoRoutingEnabled,
+		RoutesApplied:           s.routesApplied,
+		WifiActive:              s.wifiActive,
+		PhoneActive:             s.phoneActive,
+		LastAppliedAt:           s.lastAppliedAt,
+		LastClearedAt:           s.lastClearedAt,
+		DNSProxyEnabled:         s.dnsProxyEnabled,
+		AutoRefreshRouteEnabled: s.autoRefreshRouteEnabled,
 	}
 }

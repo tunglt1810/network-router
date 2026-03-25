@@ -6,11 +6,27 @@ import (
 	"fmt"
 	"log"
 	"net"
-	"network-router/pkg/core"
 	"os"
+
+	"network-router/pkg/core"
 )
 
 const socketPath = "/tmp/network-router.sock"
+
+// IPC Action Constants
+const (
+	ActionStatus             = "status"
+	ActionEnable             = "enable"
+	ActionDisable            = "disable"
+	ActionApply              = "apply"
+	ActionClear              = "clear"
+	ActionRestart            = "restart"
+	ActionRefresh            = "refresh"
+	ActionEnableDNSProxy     = "enable_dns_proxy"
+	ActionDisableDNSProxy    = "disable_dns_proxy"
+	ActionEnableAutoRefresh  = "enable_auto_refresh"
+	ActionDisableAutoRefresh = "disable_auto_refresh"
+)
 
 // IPCRequest represents a client request
 type IPCRequest struct {
@@ -20,9 +36,9 @@ type IPCRequest struct {
 
 // IPCResponse represents a server response
 type IPCResponse struct {
-	Success bool                   `json:"success"`
-	Message string                 `json:"message,omitempty"`
-	Data    map[string]interface{} `json:"data,omitempty"`
+	Success bool          `json:"success"`
+	Message string        `json:"message,omitempty"`
+	Data    *RouterStatus `json:"data,omitempty"`
 }
 
 // IPCServer handles IPC communication
@@ -107,7 +123,7 @@ func (s *IPCServer) handleConnection(conn net.Conn) {
 		return
 	}
 
-	if req.Action != "status" {
+	if req.Action != ActionStatus {
 		log.Printf("IPC request: %s", req.Action)
 	}
 
@@ -118,13 +134,13 @@ func (s *IPCServer) handleConnection(conn net.Conn) {
 // processRequest processes an IPC request and returns a response
 func (s *IPCServer) processRequest(req IPCRequest) IPCResponse {
 	switch req.Action {
-	case "status":
+	case ActionStatus:
 		return IPCResponse{
 			Success: true,
 			Data:    s.state.GetStatus(),
 		}
 
-	case "enable":
+	case ActionEnable:
 		s.state.SetAutoRouting(true)
 		// DNS Proxy lifecycle is now managed by Monitor based on routing status
 		return IPCResponse{
@@ -132,7 +148,7 @@ func (s *IPCServer) processRequest(req IPCRequest) IPCResponse {
 			Message: "Auto-routing enabled",
 		}
 
-	case "disable":
+	case ActionDisable:
 		s.state.SetAutoRouting(false)
 		// DNS Proxy lifecycle is now managed by Monitor based on routing status
 		return IPCResponse{
@@ -140,7 +156,7 @@ func (s *IPCServer) processRequest(req IPCRequest) IPCResponse {
 			Message: "Auto-routing disabled",
 		}
 
-	case "apply":
+	case ActionApply:
 		if err := s.monitor.ForceApply(); err != nil {
 			return IPCResponse{
 				Success: false,
@@ -152,7 +168,7 @@ func (s *IPCServer) processRequest(req IPCRequest) IPCResponse {
 			Message: "Routes applied successfully",
 		}
 
-	case "clear":
+	case ActionClear:
 		autoRoutingWasEnabled := s.state.IsAutoRoutingEnabled()
 		if err := s.monitor.ForceClear(); err != nil {
 			return IPCResponse{
@@ -169,7 +185,7 @@ func (s *IPCServer) processRequest(req IPCRequest) IPCResponse {
 			Message: msg,
 		}
 
-	case "restart":
+	case ActionRestart:
 		if err := s.monitor.ForceClear(); err != nil {
 			return IPCResponse{
 				Success: false,
@@ -187,14 +203,14 @@ func (s *IPCServer) processRequest(req IPCRequest) IPCResponse {
 			Message: "Routes restarted successfully",
 		}
 
-	case "refresh":
+	case ActionRefresh:
 		s.monitor.RefreshRoutes()
 		return IPCResponse{
 			Success: true,
 			Message: "Refresh triggered",
 		}
 
-	case "enable_dns_proxy":
+	case ActionEnableDNSProxy:
 		if s.dnsProxy != nil {
 			if err := s.dnsProxy.Start(); err != nil {
 				return IPCResponse{
@@ -213,7 +229,7 @@ func (s *IPCServer) processRequest(req IPCRequest) IPCResponse {
 			Message: "DNS Proxy not initialized",
 		}
 
-	case "disable_dns_proxy":
+	case ActionDisableDNSProxy:
 		if s.dnsProxy != nil {
 			if err := s.dnsProxy.Stop(); err != nil {
 				return IPCResponse{
@@ -230,6 +246,20 @@ func (s *IPCServer) processRequest(req IPCRequest) IPCResponse {
 		return IPCResponse{
 			Success: false,
 			Message: "DNS Proxy not initialized",
+		}
+
+	case ActionEnableAutoRefresh:
+		s.monitor.EnableAutoRefreshRoute()
+		return IPCResponse{
+			Success: true,
+			Message: "Auto-refresh route enabled",
+		}
+
+	case ActionDisableAutoRefresh:
+		s.monitor.DisableAutoRefreshRoute()
+		return IPCResponse{
+			Success: true,
+			Message: "Auto-refresh route disabled",
 		}
 
 	default:

@@ -3,23 +3,24 @@ package daemon
 import (
 	"context"
 	"log"
-	"network-router/pkg/core"
 	"os"
 	"time"
+
+	"network-router/pkg/core"
 
 	"github.com/robfig/cron/v3"
 )
 
 // Monitor watches for network interface changes
 type Monitor struct {
-	Router        *core.Router
-	state         *RouterState
-	config        *core.Config
-	checkInterval time.Duration
-	cron             *cron.Cron
-	persistentCron   *cron.Cron
-	refreshCh        chan bool
-	dnsProxy         *core.DNSProxy
+	Router         *core.Router
+	state          *RouterState
+	config         *core.Config
+	checkInterval  time.Duration
+	cron           *cron.Cron
+	persistentCron *cron.Cron
+	refreshCh      chan bool
+	dnsProxy       *core.DNSProxy
 }
 
 // NewMonitor creates a new network monitor
@@ -151,7 +152,7 @@ func (m *Monitor) checkAndApplyRouting() error {
 
 		m.state.SetRoutesApplied(true)
 		log.Println("✓ Routes automatically applied")
-		
+
 		// Start DNS Proxy if enabled
 		if m.dnsProxy != nil {
 			if err := m.dnsProxy.Start(); err != nil {
@@ -160,7 +161,7 @@ func (m *Monitor) checkAndApplyRouting() error {
 				m.state.SetDNSProxyEnabled(true)
 			}
 		}
-		
+
 		m.startRefreshCron()
 	}
 
@@ -179,7 +180,7 @@ func (m *Monitor) checkAndApplyRouting() error {
 
 		m.state.SetRoutesApplied(false)
 		log.Println("✓ Routes automatically cleared")
-		
+
 		// Stop DNS Proxy
 		if m.dnsProxy != nil {
 			if err := m.dnsProxy.Stop(); err != nil {
@@ -188,7 +189,7 @@ func (m *Monitor) checkAndApplyRouting() error {
 				m.state.SetDNSProxyEnabled(false)
 			}
 		}
-		
+
 		m.stopRefreshCron()
 	}
 
@@ -212,7 +213,7 @@ func (m *Monitor) ForceApply() error {
 
 	m.Router = router
 	m.state.SetRoutesApplied(true)
-	
+
 	// Start DNS Proxy
 	if m.dnsProxy != nil {
 		if err := m.dnsProxy.Start(); err != nil {
@@ -221,7 +222,7 @@ func (m *Monitor) ForceApply() error {
 			m.state.SetDNSProxyEnabled(true)
 		}
 	}
-	
+
 	m.startRefreshCron()
 
 	wifiActive, phoneActive := router.GetInterfaceStatus()
@@ -254,7 +255,7 @@ func (m *Monitor) ForceClear() error {
 	}
 
 	m.state.SetRoutesApplied(false)
-	
+
 	// Stop DNS Proxy
 	if m.dnsProxy != nil {
 		if err := m.dnsProxy.Stop(); err != nil {
@@ -263,7 +264,7 @@ func (m *Monitor) ForceClear() error {
 			m.state.SetDNSProxyEnabled(false)
 		}
 	}
-	
+
 	m.stopRefreshCron()
 	return nil
 }
@@ -279,9 +280,21 @@ func (m *Monitor) RefreshRoutes() {
 	}
 }
 
+// EnableAutoRefreshRoute enables auto-refresh route and starts cron
+func (m *Monitor) EnableAutoRefreshRoute() {
+	m.state.SetAutoRefreshRouteEnabled(true)
+	m.startRefreshCron()
+}
+
+// DisableAutoRefreshRoute disables auto-refresh route and stops cron
+func (m *Monitor) DisableAutoRefreshRoute() {
+	m.state.SetAutoRefreshRouteEnabled(false)
+	m.stopRefreshCron()
+}
+
 // startRefreshCron starts the scheduled refresh cronjob if configured
 func (m *Monitor) startRefreshCron() {
-	if m.config.RouteRefreshCron == "" {
+	if m.config.RouteRefreshCron == "" || !m.state.IsAutoRefreshRouteEnabled() {
 		return
 	}
 

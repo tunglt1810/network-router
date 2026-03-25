@@ -3,11 +3,12 @@ package core
 import (
 	"fmt"
 	"log"
-	"network-router/pkg/utils"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
+
+	"network-router/pkg/utils"
 
 	"gopkg.in/yaml.v3"
 )
@@ -333,7 +334,7 @@ func (r *Router) AddDynamicRoute(ip string) error {
 	}
 
 	r.resolvedIPs = append(r.resolvedIPs, ip)
-	
+
 	// Incrementally update the saved file
 	return r.saveResolvedIPs()
 }

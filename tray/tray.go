@@ -3,9 +3,11 @@ package tray
 import (
 	"fmt"
 	"log"
+	"time"
+
 	"network-router/assets"
 	"network-router/client"
-	"time"
+	"network-router/daemon"
 
 	"github.com/getlantern/systray"
 )
@@ -17,15 +19,16 @@ type TrayApp struct {
 	iconHidden bool
 
 	// Menu items
-	mStatus    *systray.MenuItem
-	mToggle    *systray.MenuItem
-	mApply     *systray.MenuItem
-	mRefresh   *systray.MenuItem
-	mClear     *systray.MenuItem
-	mDNSProxy  *systray.MenuItem
-	mHideIcon  *systray.MenuItem
-	mSeparator *systray.MenuItem
-	mQuit      *systray.MenuItem
+	mStatus      *systray.MenuItem
+	mToggle      *systray.MenuItem
+	mApply       *systray.MenuItem
+	mRefresh     *systray.MenuItem
+	mClear       *systray.MenuItem
+	mDNSProxy    *systray.MenuItem
+	mAutoRefresh *systray.MenuItem
+	mHideIcon    *systray.MenuItem
+	mSeparator   *systray.MenuItem
+	mQuit        *systray.MenuItem
 }
 
 // NewTrayApp creates a new tray application
@@ -58,6 +61,7 @@ func (t *TrayApp) onReady() {
 	t.mRefresh = systray.AddMenuItem("🔄 Refresh Routes", "Re-resolve IPs and re-apply")
 	t.mClear = systray.AddMenuItem("🗑️ Clear Routes", "Remove all routes")
 	t.mDNSProxy = systray.AddMenuItem("📡 Enable DNS Proxy", "Toggle DNS Proxy (for wildcard domains)")
+	t.mAutoRefresh = systray.AddMenuItem("⏳ Enable Auto Refresh", "Toggle scheduled route refresh")
 
 	systray.AddSeparator()
 
@@ -94,7 +98,7 @@ func (t *TrayApp) pollStatus() {
 
 // updateStatus fetches and updates the status
 func (t *TrayApp) updateStatus() {
-	resp, err := t.client.SendRequest("status", nil)
+	resp, err := t.client.SendRequest(daemon.ActionStatus, nil)
 	if err != nil {
 		t.lastStatus = nil
 		t.updateIcon(false, true)
@@ -121,21 +125,15 @@ func (t *TrayApp) updateStatus() {
 	wifiActive := false
 	phoneActive := false
 	dnsProxyEnabled := false
+	autoRefreshEnabled := false
 
-	if val, ok := resp.Data["auto_routing_enabled"].(bool); ok {
-		autoRouting = val
-	}
-	if val, ok := resp.Data["routes_applied"].(bool); ok {
-		routesApplied = val
-	}
-	if val, ok := resp.Data["wifi_active"].(bool); ok {
-		wifiActive = val
-	}
-	if val, ok := resp.Data["phone_active"].(bool); ok {
-		phoneActive = val
-	}
-	if val, ok := resp.Data["dns_proxy_enabled"].(bool); ok {
-		dnsProxyEnabled = val
+	if data := resp.Data; data != nil {
+		autoRouting = data.AutoRoutingEnabled
+		routesApplied = data.RoutesApplied
+		wifiActive = data.WifiActive
+		phoneActive = data.PhoneActive
+		dnsProxyEnabled = data.DNSProxyEnabled
+		autoRefreshEnabled = data.AutoRefreshRouteEnabled
 	}
 
 	// Update icon based on state
@@ -164,12 +162,20 @@ func (t *TrayApp) updateStatus() {
 		t.mDNSProxy.SetTitle("📡 Enable DNS Proxy")
 	}
 
+	// Update Auto Refresh button
+	if autoRefreshEnabled {
+		t.mAutoRefresh.SetTitle("⏳ Disable Auto Refresh")
+	} else {
+		t.mAutoRefresh.SetTitle("⏳ Enable Auto Refresh")
+	}
+
 	// Enable all controls when connected
 	t.mToggle.Enable()
 	t.mApply.Enable()
 	t.mRefresh.Enable()
 	t.mClear.Enable()
 	t.mDNSProxy.Enable()
+	t.mAutoRefresh.Enable()
 }
 
 // updateIcon updates the tray icon based on state
@@ -204,6 +210,8 @@ func (t *TrayApp) handleMenuClicks() {
 			t.handleClear()
 		case <-t.mDNSProxy.ClickedCh:
 			t.handleDNSProxyToggle()
+		case <-t.mAutoRefresh.ClickedCh:
+			t.handleAutoRefreshToggle()
 		case <-t.mHideIcon.ClickedCh:
 			t.handleHideIcon()
 		case <-t.mQuit.ClickedCh:
@@ -220,15 +228,15 @@ func (t *TrayApp) handleToggle() {
 	}
 
 	autoRouting := false
-	if val, ok := t.lastStatus.Data["auto_routing_enabled"].(bool); ok {
-		autoRouting = val
+	if data := t.lastStatus.Data; data != nil {
+		autoRouting = data.AutoRoutingEnabled
 	}
 
 	var err error
 	if autoRouting {
-		_, err = t.client.SendRequest("disable", nil)
+		_, err = t.client.SendRequest(daemon.ActionDisable, nil)
 	} else {
-		_, err = t.client.SendRequest("enable", nil)
+		_, err = t.client.SendRequest(daemon.ActionEnable, nil)
 	}
 
 	if err != nil {
@@ -242,7 +250,7 @@ func (t *TrayApp) handleToggle() {
 
 // handleApply applies routes
 func (t *TrayApp) handleApply() {
-	_, err := t.client.SendRequest("apply", nil)
+	_, err := t.client.SendRequest(daemon.ActionApply, nil)
 	if err != nil {
 		log.Printf("Apply error: %v", err)
 		t.showNotification("Error", fmt.Sprintf("Failed to apply routes: %v", err))
@@ -254,7 +262,7 @@ func (t *TrayApp) handleApply() {
 
 // handleRefresh refreshes (re-resolves) routes
 func (t *TrayApp) handleRefresh() {
-	_, err := t.client.SendRequest("refresh", nil)
+	_, err := t.client.SendRequest(daemon.ActionRefresh, nil)
 	if err != nil {
 		log.Printf("Refresh error: %v", err)
 		t.showNotification("Error", fmt.Sprintf("Failed to refresh routes: %v", err))
@@ -266,7 +274,7 @@ func (t *TrayApp) handleRefresh() {
 
 // handleClear clears routes
 func (t *TrayApp) handleClear() {
-	_, err := t.client.SendRequest("clear", nil)
+	_, err := t.client.SendRequest(daemon.ActionClear, nil)
 	if err != nil {
 		log.Printf("Clear error: %v", err)
 		t.showNotification("Error", fmt.Sprintf("Failed to clear routes: %v", err))
@@ -283,20 +291,47 @@ func (t *TrayApp) handleDNSProxyToggle() {
 	}
 
 	dnsProxyEnabled := false
-	if val, ok := t.lastStatus.Data["dns_proxy_enabled"].(bool); ok {
-		dnsProxyEnabled = val
+	if data := t.lastStatus.Data; data != nil {
+		dnsProxyEnabled = data.DNSProxyEnabled
 	}
 
 	var err error
 	if dnsProxyEnabled {
-		_, err = t.client.SendRequest("disable_dns_proxy", nil)
+		_, err = t.client.SendRequest(daemon.ActionDisableDNSProxy, nil)
 	} else {
-		_, err = t.client.SendRequest("enable_dns_proxy", nil)
+		_, err = t.client.SendRequest(daemon.ActionEnableDNSProxy, nil)
 	}
 
 	if err != nil {
 		log.Printf("DNS Proxy toggle error: %v", err)
 		t.showNotification("Error", fmt.Sprintf("Failed to toggle DNS Proxy: %v", err))
+	} else {
+		// Immediately update status
+		time.AfterFunc(500*time.Millisecond, t.updateStatus)
+	}
+}
+
+// handleAutoRefreshToggle toggles the auto refresh route feature
+func (t *TrayApp) handleAutoRefreshToggle() {
+	if t.lastStatus == nil || t.lastStatus.Data == nil {
+		return
+	}
+
+	autoRefreshEnabled := false
+	if data := t.lastStatus.Data; data != nil {
+		autoRefreshEnabled = data.AutoRefreshRouteEnabled
+	}
+
+	var err error
+	if autoRefreshEnabled {
+		_, err = t.client.SendRequest(daemon.ActionDisableAutoRefresh, nil)
+	} else {
+		_, err = t.client.SendRequest(daemon.ActionEnableAutoRefresh, nil)
+	}
+
+	if err != nil {
+		log.Printf("Auto refresh toggle error: %v", err)
+		t.showNotification("Error", fmt.Sprintf("Failed to toggle auto refresh: %v", err))
 	} else {
 		// Immediately update status
 		time.AfterFunc(500*time.Millisecond, t.updateStatus)
@@ -318,11 +353,9 @@ func (t *TrayApp) handleHideIcon() {
 		if t.lastStatus != nil && t.lastStatus.Success && t.lastStatus.Data != nil {
 			autoRouting := false
 			routesApplied := false
-			if val, ok := t.lastStatus.Data["auto_routing_enabled"].(bool); ok {
-				autoRouting = val
-			}
-			if val, ok := t.lastStatus.Data["routes_applied"].(bool); ok {
-				routesApplied = val
+			if data := t.lastStatus.Data; data != nil {
+				autoRouting = data.AutoRoutingEnabled
+				routesApplied = data.RoutesApplied
 			}
 			t.updateIcon(autoRouting && routesApplied, false)
 		} else {

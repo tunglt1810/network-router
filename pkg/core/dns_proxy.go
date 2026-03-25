@@ -259,10 +259,10 @@ func (p *DNSProxy) getSystemDNS() []string {
 	if err != nil || len(config.Servers) == 0 {
 		return nil
 	}
-	
+
 	servers := make([]string, 0, len(config.Servers))
 	for _, s := range config.Servers {
-		servers = append(servers, s + ":" + config.Port)
+		servers = append(servers, s+":"+config.Port)
 	}
 	return servers
 }
