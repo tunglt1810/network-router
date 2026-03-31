@@ -22,7 +22,7 @@ tether_domains:
   - 'origin-tracker.githubusercontent.com'
 
   # Telemetry and tracking
-  - 'collector.github.com'
+  # - 'collector.github.com'
   - 'default.exp-tas.com'
 
   # Static assets
@@ -98,6 +98,12 @@ tether_domains:
   - 'line-scdn.net'
   - '*.line-scdn.net'
   - 'nhncorp.jp'
+
+  # Comet Browser (Perplexity)
+  - 'perplexity.ai'
+  - '*.perplexity.ai'
+  - 'pplx.ai'
+  - '*.pplx.ai'
 
 # Danh sách các dải IP sẽ đi qua Phone (Tethering)
 tether_cidrs:

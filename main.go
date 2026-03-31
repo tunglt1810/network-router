@@ -11,10 +11,11 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"os"
+
 	"network-router/client"
 	"network-router/daemon"
 	"network-router/tray"
-	"os"
 )
 
 func main() {

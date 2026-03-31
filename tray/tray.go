@@ -8,6 +8,7 @@ import (
 	"network-router/assets"
 	"network-router/client"
 	"network-router/daemon"
+	"os/exec"
 
 	"github.com/getlantern/systray"
 )
@@ -26,6 +27,7 @@ type TrayApp struct {
 	mClear       *systray.MenuItem
 	mDNSProxy    *systray.MenuItem
 	mAutoRefresh *systray.MenuItem
+	mDebug       *systray.MenuItem
 	mHideIcon    *systray.MenuItem
 	mSeparator   *systray.MenuItem
 	mQuit        *systray.MenuItem
@@ -62,6 +64,9 @@ func (t *TrayApp) onReady() {
 	t.mClear = systray.AddMenuItem("🗑️ Clear Routes", "Remove all routes")
 	t.mDNSProxy = systray.AddMenuItem("📡 Enable DNS Proxy", "Toggle DNS Proxy (for wildcard domains)")
 	t.mAutoRefresh = systray.AddMenuItem("⏳ Enable Auto Refresh", "Toggle scheduled route refresh")
+
+	systray.AddSeparator()
+	t.mDebug = systray.AddMenuItem("🔍 Show Debug", "Follow service logs in terminal")
 
 	systray.AddSeparator()
 
@@ -214,6 +219,8 @@ func (t *TrayApp) handleMenuClicks() {
 			t.handleAutoRefreshToggle()
 		case <-t.mHideIcon.ClickedCh:
 			t.handleHideIcon()
+		case <-t.mDebug.ClickedCh:
+			t.handleDebug()
 		case <-t.mQuit.ClickedCh:
 			systray.Quit()
 			return
@@ -364,6 +371,30 @@ func (t *TrayApp) handleHideIcon() {
 		t.mHideIcon.SetTitle("🕶️ Hide Icon")
 		t.mHideIcon.SetTooltip("Hide tray icon (show with Cmd+Opt+Shift+R)")
 		log.Println("Icon shown")
+	}
+}
+
+// handleDebug opens a terminal to tail the logs
+func (t *TrayApp) handleDebug() {
+	logPath := "/var/log/network-router.log"
+	script := fmt.Sprintf(`
+		if application "iTerm" is running or (exists application "iTerm") then
+			tell application "iTerm"
+				create window with default profile command "tail -f %s"
+				activate
+			end tell
+		else
+			tell application "Terminal"
+				do script "tail -f %s"
+				activate
+			end tell
+		end if`, logPath, logPath)
+
+	cmd := exec.Command("osascript", "-e", script)
+	err := cmd.Run()
+	if err != nil {
+		log.Printf("Debug error: %v", err)
+		t.showNotification("Error", fmt.Sprintf("Failed to open terminal: %v", err))
 	}
 }
 
