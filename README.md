@@ -10,7 +10,10 @@ This project has evolved from a simple CLI tool into a **System Daemon + CLI Cli
 git clone https://github.com/bez/network-router.git && cd network-router && sudo make install
 ```
 
-Once installed, the tray icon will automatically appear in your menu bar! 🎉
+Once installed, the daemon will run in the background. You can enable the tray icon anytime!
+```bash
+network-router tray-enable
+```
 
 ## Features
 
@@ -55,9 +58,8 @@ The script will automatically:
 - ✅ Install to `/usr/local/bin/network-router`
 - ✅ Install config file to `/usr/local/etc/network-router/`
 - ✅ Register and start daemon service (LaunchDaemon)
-- ✅ Register and start tray app (LaunchAgent)
+- ✅ Install tray app configuration (LaunchAgent)
 - ✅ Run health check to verify service
-- ✅ Display tray icon in the menu bar
 
 ### Method 2: Manual Installation (Step-by-step)
 
@@ -79,8 +81,8 @@ The installation script will:
 1.  Build the `network-router` binary and copy it to `/usr/local/bin/`.
 2.  Create a configuration directory at `/usr/local/etc/network-router/`.
 3.  Install the daemon service into `/Library/LaunchDaemons/`.
-4.  **Install the tray app to run automatically at login** in `~/Library/LaunchAgents/`.
-5.  Start both the daemon and tray app immediately.
+4.  **Install the tray app configuration** in `~/Library/LaunchAgents/` (Disabled by default).
+5.  Start the daemon service immediately.
 
 **Note:** The tray icon will automatically appear in the menu bar after installation! 🎉
 
@@ -146,9 +148,17 @@ network-router restart
 
 ## Usage Instructions
 
-### System Tray (Default)
+### System Tray (Opt-in)
 
-After installation, the **tray icon automatically appears** in the menu bar every time you log in. No manual command needed!
+After installation, the **tray icon is disabled by default** to save resources. You can enable it using the CLI:
+
+```bash
+# Enable and start tray icon (persists after reboot)
+network-router tray-enable
+
+# Disable and stop tray icon
+network-router tray-disable
+```
 
 **Icon Status:**
 *   🟢 **Green Icon**: Daemon is active and routes are applied.
@@ -168,17 +178,16 @@ After installation, the **tray icon automatically appears** in the menu bar ever
 *   **Quit**: Stops the tray app (can be restarted with `network-router tray`).
 
 **Managing Tray App:**
-```bash
 # Check status
 launchctl list | grep network-router.tray
 
-# Disable tray app (temporary)
-launchctl unload ~/Library/LaunchAgents/com.bez.network-router.tray.plist
+# Enable/Start tray
+network-router tray-enable
 
-# Re-enable
-launchctl load ~/Library/LaunchAgents/com.bez.network-router.tray.plist
+# Disable/Stop tray
+network-router tray-disable
 
-# Or run manually
+# Or run manually in foreground
 network-router tray
 ```
 
@@ -197,6 +206,12 @@ Pause automatic routing (keeps service running but stops network interference).
 ```bash
 network-router disable
 network-router enable
+```
+
+#### Tray Management
+```bash
+network-router tray-enable   # Register and start tray icon
+network-router tray-disable  # Stop and unregister tray icon
 ```
 
 #### Manual Application (Apply/Clear)
@@ -283,9 +298,12 @@ make clear-build
 
 ## Tips & Best Practices
 
-1. **Performance**: Routes are cached, only reapplied on network change
-2. **Battery**: Minimal impact (~5-10MB RAM, negligible CPU)
-3. **Updates**: Pull new code, rebuild, and restart service
+1. **Performance**: Routes are cached, only reapplied on network change.
+2. **Battery & Memory**: 
+   - **Daemon**: Minimal impact (~10-15MB RAM).
+   - **Tray**: ~40MB RAM (Real Memory). 
+   - *Note*: On macOS/Go, you might see a "Virtual Memory" of 400GB+ or "Memory" of 500MB+ in Activity Monitor. This is normal Go runtime behavior and does not represent actual RAM usage.
+3. **Updates**: Pull new code, rebuild, and restart service.
 4. **Config Backup**: Save a backup of `/usr/local/etc/network-router/config.yaml`
 5. **Multiple Macs**: Same config works if using the same network names
 

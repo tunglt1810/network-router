@@ -176,6 +176,7 @@ fi
 
 remove_file "/Library/LaunchDaemons/com.bez.network-router.plist"
 remove_file "$TRAY_PLIST"
+remove_file "/usr/local/etc/network-router/tray-agent.plist"
 remove_file "/usr/local/bin/network-router"
 remove_file "/usr/local/etc/network-router"
 remove_file "/tmp/network-router.sock"

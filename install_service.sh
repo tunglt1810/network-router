@@ -106,14 +106,12 @@ chmod 644 "$DAEMON_PLIST_DEST"
 chown root:wheel "$DAEMON_PLIST_DEST"
 print_success "Daemon plist installed"
 
-# 5. Install Tray LaunchAgent
-print_step "Installing tray agent (user: $REAL_USER)..."
-TRAY_PLIST_USER_DEST="$REAL_HOME/Library/LaunchAgents/com.bez.network-router.tray.plist"
-mkdir -p "$REAL_HOME/Library/LaunchAgents"
-cp "$TRAY_PLIST_SRC" "$TRAY_PLIST_USER_DEST"
-chmod 644 "$TRAY_PLIST_USER_DEST"
-chown "$REAL_USER:staff" "$TRAY_PLIST_USER_DEST"
-print_success "Tray agent plist installed"
+# 5. Install Tray LaunchAgent Template (for user to enable later)
+print_step "Installing tray agent template..."
+TRAY_PLIST_TEMPLATE="$CONFIG_DIR/tray-agent.plist"
+cp "$TRAY_PLIST_SRC" "$TRAY_PLIST_TEMPLATE"
+chmod 644 "$TRAY_PLIST_TEMPLATE"
+print_success "Tray agent template installed at $TRAY_PLIST_TEMPLATE"
 
 # 6. Load Daemon Service
 print_step "Starting daemon service..."
@@ -140,6 +138,10 @@ else
     exit 1
 fi
 
+# 7. Tray icon is not started by default anymore. 
+# It can be enabled with 'network-router tray-enable'
+TRAY_STARTED=false
+
 sleep 2
 
 # Verify daemon is running
@@ -151,54 +153,8 @@ else
     exit 1
 fi
 
-# 7. Load Tray Agent (as user)
-print_step "Starting tray agent..."
-REAL_UID=$(id -u "$REAL_USER")
-
-# Unload if exists
-launchctl asuser "$REAL_UID" sudo -u "$REAL_USER" launchctl unload "$TRAY_PLIST_USER_DEST" 2>/dev/null || true
-
-# Bootstrap the agent
-if launchctl bootstrap "gui/$REAL_UID" "$TRAY_PLIST_USER_DEST" 2>/dev/null; then
-    print_success "Tray agent registered"
-    # Kickstart it to run immediately
-    if launchctl kickstart -k "gui/$REAL_UID/com.bez.network-router.tray" 2>/dev/null; then
-        print_success "Tray agent started"
-        TRAY_STARTED=true
-    fi
-else
-    # Fallback: try load with asuser
-    if launchctl asuser "$REAL_UID" sudo -u "$REAL_USER" launchctl load "$TRAY_PLIST_USER_DEST" 2>/dev/null; then
-        print_success "Tray agent loaded"
-        TRAY_STARTED=true
-    else
-        print_warning "Could not auto-start tray agent via launchctl"
-        # Last attempt: run binary directly in background as user
-        print_step "Attempting direct launch..."
-        if sudo -u "$REAL_USER" nohup "$INSTALL_BIN_PATH" tray >/tmp/network-router-tray-launch.log 2>&1 &
-        then
-            sleep 3
-            if pgrep -f "network-router tray" > /dev/null; then
-                print_success "Tray app launched directly"
-                TRAY_STARTED=true
-            fi
-        fi
-    fi
-fi
-
-sleep 2
-
-# Verify tray is running
-if [ "$TRAY_STARTED" != true ]; then
-    if launchctl print "gui/$REAL_UID/com.bez.network-router.tray" &>/dev/null 2>&1; then
-        print_success "Tray agent registered (will start on next login)"
-        echo ""
-        print_warning "Tray icon not visible yet. Start it manually:"
-        echo "  $INSTALL_BIN_PATH tray &"
-    else
-        print_warning "Please start tray manually: $INSTALL_BIN_PATH tray"
-    fi
-fi
+# 7. Tray icon is NOT started by default (opt-in)
+print_step "Tray icon is currently disabled by default."
 
 # 8. Health check
 print_step "Running health check..."
@@ -241,10 +197,7 @@ echo -e "${BLUE}Logs:${NC}"
 echo "  • Daemon: /var/log/network-router.log"
 echo "  • Tray:   /tmp/network-router-tray.log"
 echo ""
-if [ "$TRAY_STARTED" = true ]; then
-    echo -e "${GREEN}✓ Tray icon should be visible in menu bar!${NC}"
-else
-    echo -e "${YELLOW}⚡ To see tray icon now, run: network-router tray${NC}"
-    echo -e "${BLUE}   (Or it will auto-start on next login)${NC}"
-fi
+echo ""
+echo -e "${YELLOW}⚡ Tray icon is NOT installed by default to avoid clutter.${NC}"
+echo -e "${BLUE}To enable it and get a menu bar icon, run:${NC} network-router tray-enable"
 echo ""
