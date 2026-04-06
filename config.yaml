@@ -9,7 +9,7 @@ auto_refresh_route: false
 # Danh sách các domain routing qua Phone (Tethering)
 # Wildcard được hỗ trợ ví dụ: *.internal.com
 tether_domains:
-  - 'github.com'
+  - '*.github.com'
   # Github Copilot
   # Authentication domains (critical for agent mode)
   - 'vscode-auth.github.com'
@@ -38,6 +38,7 @@ tether_domains:
   - '*.clients4.google.com'
   - '*.clients5.google.com'
   - '*.clients6.google.com'
+  - 'cloudcode-pa.googleapis.com'
 
   # Gemini API endpoints
   - 'generativelanguage.googleapis.com'

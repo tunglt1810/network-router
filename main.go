@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"os/exec"
 
 	"network-router/client"
 	"network-router/daemon"
@@ -48,6 +49,10 @@ func main() {
 		runClientCommand("enable-dns")
 	case "disable-dns":
 		runClientCommand("disable-dns")
+	case "tray-enable":
+		runTrayEnable()
+	case "tray-disable":
+		runTrayDisable()
 	case "help", "-h", "--help":
 		printUsage()
 	default:
@@ -107,6 +112,68 @@ func runClientCommand(command string) {
 	}
 }
 
+func runTrayEnable() {
+	userHome, _ := os.UserHomeDir()
+	uid := os.Getuid()
+	plistDest := fmt.Sprintf("%s/Library/LaunchAgents/com.bez.network-router.tray.plist", userHome)
+	plistTemplate := "/usr/local/etc/network-router/tray-agent.plist"
+	label := "gui/%d/com.bez.network-router.tray"
+	fullLabel := fmt.Sprintf(label, uid)
+
+	fmt.Printf("Enabling tray icon for user %d...\n", uid)
+
+	// 1. Ensure LaunchAgents directory exists
+	_ = os.MkdirAll(fmt.Sprintf("%s/Library/LaunchAgents", userHome), 0755)
+
+	// 2. Install plist from template if not already there
+	if _, err := os.Stat(plistTemplate); err == nil {
+		// Use cp command to maintain file permissions or just write it
+		cmdCopy := exec.Command("cp", plistTemplate, plistDest)
+		if err := cmdCopy.Run(); err != nil {
+			fmt.Printf("Error: Could not install tray configuration: %v\n", err)
+			os.Exit(1)
+		}
+	} else {
+		fmt.Printf("Error: Tray service template not found. Please run sudo ./install_service.sh first.\n")
+		os.Exit(1)
+	}
+
+	// 3. Bootstrap (register)
+	cmdRegister := exec.Command("launchctl", "bootstrap", fmt.Sprintf("gui/%d", uid), plistDest)
+	_ = cmdRegister.Run() // Ignore error if already bootstrapped
+
+	// 4. Kickstart (start) - use -k to restart if already running
+	cmdStart := exec.Command("launchctl", "kickstart", "-k", fullLabel)
+	if err := cmdStart.Run(); err != nil {
+		fmt.Printf("Error starting tray: %v\n", err)
+		os.Exit(1)
+	}
+
+	fmt.Println("✓ Tray icon enabled, registered, and started.")
+}
+
+func runTrayDisable() {
+	userHome, _ := os.UserHomeDir()
+	uid := os.Getuid()
+	plistPath := fmt.Sprintf("%s/Library/LaunchAgents/com.bez.network-router.tray.plist", userHome)
+	label := "gui/%d/com.bez.network-router.tray"
+	fullLabel := fmt.Sprintf(label, uid)
+
+	fmt.Printf("Disabling tray icon for user %d...\n", uid)
+
+	// 1. Bootout (stop and unregister)
+	cmdStop := exec.Command("launchctl", "bootout", fullLabel)
+	_ = cmdStop.Run() // Best effort
+
+	// 2. Remove the plist file to avoid triggering macOS background alerts
+	if _, err := os.Stat(plistPath); err == nil {
+		_ = os.Remove(plistPath)
+		fmt.Println("✓ Removed background agent configuration.")
+	}
+
+	fmt.Println("✓ Tray icon disabled and cleaned up.")
+}
+
 func printUsage() {
 	fmt.Println("Network Router CLI - Automatic Network Routing Daemon")
 	fmt.Println()
@@ -127,6 +194,9 @@ func printUsage() {
 	fmt.Println("  restart             Clear and re-apply routes")
 	fmt.Println("  enable-dns          Enable DNS Proxy")
 	fmt.Println("  disable-dns         Disable DNS Proxy")
+	fmt.Println("  tray-enable         Register and start the tray icon")
+	fmt.Println("  tray-disable        Stop and unregister the tray icon")
+	fmt.Println()
 	fmt.Println("  help                Show this help message")
 	fmt.Println()
 	fmt.Println("Examples:")
