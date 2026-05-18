@@ -64,6 +64,7 @@ tether_domains:
   - '*.googlevideo.com'
   - 'music.youtube.com'
   - 'youtube.com'
+  - 'ssh.cloud.google.com'
 
   # Apple
   - 'appleid.apple.com'

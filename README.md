@@ -7,7 +7,7 @@ This project has evolved from a simple CLI tool into a **System Daemon + CLI Cli
 ## ⚡ Quick Start - Install with one command
 
 ```bash
-git clone https://github.com/bez/network-router.git && cd network-router && sudo make install
+git clone https://github.com/tunglt1810/network-router.git && cd network-router && sudo make install
 ```
 
 Once installed, the daemon will run in the background. You can enable the tray icon anytime!
@@ -32,8 +32,9 @@ network-router tray-enable
 
 *   **Daemon (`network-router daemon`)**:
     *   Runs with **root** privileges.
-    *   Listens for network changes (Network Monitor).
-    *   Executes `route` and `networksetup` commands.
+    *   **NetworkDetector**: Polls for interface changes continuously.
+    *   **StateCoordinator**: Central state machine that manages auto-routing rules and DNS Proxy lifecycle.
+    *   **RouteManager**: Safe abstraction layer executing `route` and `networksetup` commands.
     *   Opens an IPC socket at `/tmp/network-router.sock` to receive control commands.
 *   **Tray App (`network-router tray`)**:
     *   Runs with **user** privileges.
@@ -50,7 +51,7 @@ network-router tray-enable
 Just run a single command:
 
 ```bash
-git clone https://github.com/bez/network-router.git && cd network-router && sudo make install
+git clone https://github.com/tunglt1810/network-router.git && cd network-router && sudo make install
 ```
 
 The script will automatically:
@@ -67,7 +68,7 @@ If you want more detailed control:
 
 ```bash
 # Clone repository
-git clone https://github.com/bez/network-router.git
+git clone https://github.com/tunglt1810/network-router.git
 cd network-router
 
 # Build binary
@@ -393,7 +394,7 @@ echo "✅ Uninstall completed."
 ## Additional Documentation
 
 - **[ARCHITECTURE.md](ARCHITECTURE.md)**: Details on system architecture and data flow
-- **Issues**: https://github.com/bez/network-router/issues
+- **Issues**: https://github.com/tunglt1810/network-router/issues
 
 ## License
 

@@ -378,17 +378,10 @@ func (t *TrayApp) handleHideIcon() {
 func (t *TrayApp) handleDebug() {
 	logPath := "/var/log/network-router.log"
 	script := fmt.Sprintf(`
-		if application "iTerm" is running or (exists application "iTerm") then
-			tell application "iTerm"
-				create window with default profile command "tail -f %s"
-				activate
-			end tell
-		else
-			tell application "Terminal"
-				do script "tail -f %s"
-				activate
-			end tell
-		end if`, logPath, logPath)
+		tell application "Terminal"
+			activate
+			do script "tail -f %s"
+		end tell`, logPath)
 
 	cmd := exec.Command("osascript", "-e", script)
 	err := cmd.Run()

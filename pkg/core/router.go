@@ -25,12 +25,17 @@ type Router struct {
 	resolvedIPs  []string
 	wifiGateway  string
 	phoneGateway string
+	routeManager RouteManager
 }
 
 // NewRouter creates a new Router instance
-func NewRouter(config *Config) (*Router, error) {
+func NewRouter(config *Config, rm RouteManager) (*Router, error) {
+	if rm == nil {
+		rm = NewOSRouteManager()
+	}
 	return &Router{
-		config: config,
+		config:       config,
+		routeManager: rm,
 	}, nil
 }
 
@@ -255,7 +260,7 @@ func (r *Router) ClearRoutes() error {
 		wifiGateway, err := utils.GetInterfaceGateway(r.wifiIface.DeviceName)
 		if err == nil && wifiGateway != "" {
 			log.Printf("Resetting default gateway to Wifi Gateway (%s)...\n", wifiGateway)
-			if err := utils.ChangeDefaultGateway(wifiGateway); err != nil {
+			if err := r.routeManager.ChangeDefaultGateway(wifiGateway); err != nil {
 				log.Printf("Failed to reset default gateway: %v", err)
 			} else {
 				log.Println("✓ Default gateway reset to Wi-Fi.")
@@ -268,7 +273,7 @@ func (r *Router) ClearRoutes() error {
 	if err == nil {
 		log.Println("Using saved IP list for cleanup...")
 		for _, cidr := range saved.CIDRs {
-			if err := utils.DeleteRoute(cidr); err == nil {
+			if err := r.routeManager.DeleteRoute(cidr); err == nil {
 				log.Printf("✓ Deleted route for %s (saved)\n", cidr)
 			}
 		}
@@ -277,7 +282,7 @@ func (r *Router) ClearRoutes() error {
 			if !isCIDR(target) {
 				target = ip + "/32"
 			}
-			if err := utils.DeleteRoute(target); err == nil {
+			if err := r.routeManager.DeleteRoute(target); err == nil {
 				log.Printf("✓ Deleted route for IP %s (saved)\n", target)
 			}
 		}
@@ -290,7 +295,7 @@ func (r *Router) ClearRoutes() error {
 	log.Println("No saved IP list found. Falling back to current configuration...")
 
 	for _, cidr := range r.config.TetherCIDRs {
-		if err := utils.DeleteRoute(cidr); err == nil {
+		if err := r.routeManager.DeleteRoute(cidr); err == nil {
 			log.Printf("✓ Deleted route for %s\n", cidr)
 		}
 	}
@@ -305,7 +310,7 @@ func (r *Router) ClearRoutes() error {
 		if !isCIDR(target) {
 			target = ip + "/32"
 		}
-		if err := utils.DeleteRoute(target); err == nil {
+		if err := r.routeManager.DeleteRoute(target); err == nil {
 			log.Printf("✓ Deleted route for IP %s\n", target)
 		}
 	}
@@ -343,9 +348,9 @@ func (r *Router) AddDynamicRoute(ip string) error {
 
 func (r *Router) addPhoneRoute(target string) error {
 	if r.phoneGateway != "" {
-		return utils.AddRouteViaGateway(target, r.phoneGateway)
+		return r.routeManager.AddRouteViaGateway(target, r.phoneGateway)
 	}
-	return utils.AddRoute(target, r.phoneIface.DeviceName)
+	return r.routeManager.AddRoute(target, r.phoneIface.DeviceName)
 }
 
 func (r *Router) saveResolvedIPs() error {

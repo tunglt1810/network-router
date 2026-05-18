@@ -7,8 +7,6 @@ import (
 	"log"
 	"net"
 	"os"
-
-	"network-router/pkg/core"
 )
 
 const socketPath = "/tmp/network-router.sock"
@@ -43,18 +41,14 @@ type IPCResponse struct {
 
 // IPCServer handles IPC communication
 type IPCServer struct {
-	monitor  *Monitor
-	state    *RouterState
-	dnsProxy *core.DNSProxy
-	listener net.Listener
+	coordinator *Coordinator
+	listener    net.Listener
 }
 
 // NewIPCServer creates a new IPC server
-func NewIPCServer(monitor *Monitor, state *RouterState, dnsProxy *core.DNSProxy) *IPCServer {
+func NewIPCServer(coordinator *Coordinator) *IPCServer {
 	return &IPCServer{
-		monitor:  monitor,
-		state:    state,
-		dnsProxy: dnsProxy,
+		coordinator: coordinator,
 	}
 }
 
@@ -137,27 +131,25 @@ func (s *IPCServer) processRequest(req IPCRequest) IPCResponse {
 	case ActionStatus:
 		return IPCResponse{
 			Success: true,
-			Data:    s.state.GetStatus(),
+			Data:    s.coordinator.GetStatus(),
 		}
 
 	case ActionEnable:
-		s.state.SetAutoRouting(true)
-		// DNS Proxy lifecycle is now managed by Monitor based on routing status
+		s.coordinator.SetAutoRouting(true)
 		return IPCResponse{
 			Success: true,
 			Message: "Auto-routing enabled",
 		}
 
 	case ActionDisable:
-		s.state.SetAutoRouting(false)
-		// DNS Proxy lifecycle is now managed by Monitor based on routing status
+		s.coordinator.SetAutoRouting(false)
 		return IPCResponse{
 			Success: true,
 			Message: "Auto-routing disabled",
 		}
 
 	case ActionApply:
-		if err := s.monitor.ForceApply(); err != nil {
+		if err := s.coordinator.ForceApply(); err != nil {
 			return IPCResponse{
 				Success: false,
 				Message: fmt.Sprintf("Failed to apply routes: %v", err),
@@ -169,8 +161,8 @@ func (s *IPCServer) processRequest(req IPCRequest) IPCResponse {
 		}
 
 	case ActionClear:
-		autoRoutingWasEnabled := s.state.IsAutoRoutingEnabled()
-		if err := s.monitor.ForceClear(); err != nil {
+		autoRoutingWasEnabled := s.coordinator.GetStatus().AutoRoutingEnabled
+		if err := s.coordinator.ForceClear(); err != nil {
 			return IPCResponse{
 				Success: false,
 				Message: fmt.Sprintf("Failed to clear routes: %v", err),
@@ -186,13 +178,13 @@ func (s *IPCServer) processRequest(req IPCRequest) IPCResponse {
 		}
 
 	case ActionRestart:
-		if err := s.monitor.ForceClear(); err != nil {
+		if err := s.coordinator.ForceClear(); err != nil {
 			return IPCResponse{
 				Success: false,
 				Message: fmt.Sprintf("Restart failed at clear: %v", err),
 			}
 		}
-		if err := s.monitor.ForceApply(); err != nil {
+		if err := s.coordinator.ForceApply(); err != nil {
 			return IPCResponse{
 				Success: false,
 				Message: fmt.Sprintf("Restart failed at apply: %v", err),
@@ -204,59 +196,45 @@ func (s *IPCServer) processRequest(req IPCRequest) IPCResponse {
 		}
 
 	case ActionRefresh:
-		s.monitor.RefreshRoutes()
+		s.coordinator.RefreshRoutes()
 		return IPCResponse{
 			Success: true,
 			Message: "Refresh triggered",
 		}
 
 	case ActionEnableDNSProxy:
-		if s.dnsProxy != nil {
-			if err := s.dnsProxy.Start(); err != nil {
-				return IPCResponse{
-					Success: false,
-					Message: fmt.Sprintf("Failed to start DNS Proxy: %v", err),
-				}
-			}
-			s.state.SetDNSProxyEnabled(true)
+		if err := s.coordinator.SetDNSProxy(true); err != nil {
 			return IPCResponse{
-				Success: true,
-				Message: "DNS Proxy enabled",
+				Success: false,
+				Message: fmt.Sprintf("Failed to start DNS Proxy: %v", err),
 			}
 		}
 		return IPCResponse{
-			Success: false,
-			Message: "DNS Proxy not initialized",
+			Success: true,
+			Message: "DNS Proxy enabled",
 		}
 
 	case ActionDisableDNSProxy:
-		if s.dnsProxy != nil {
-			if err := s.dnsProxy.Stop(); err != nil {
-				return IPCResponse{
-					Success: false,
-					Message: fmt.Sprintf("Failed to stop DNS Proxy: %v", err),
-				}
-			}
-			s.state.SetDNSProxyEnabled(false)
+		if err := s.coordinator.SetDNSProxy(false); err != nil {
 			return IPCResponse{
-				Success: true,
-				Message: "DNS Proxy disabled",
+				Success: false,
+				Message: fmt.Sprintf("Failed to stop DNS Proxy: %v", err),
 			}
 		}
 		return IPCResponse{
-			Success: false,
-			Message: "DNS Proxy not initialized",
+			Success: true,
+			Message: "DNS Proxy disabled",
 		}
 
 	case ActionEnableAutoRefresh:
-		s.monitor.EnableAutoRefreshRoute()
+		s.coordinator.SetAutoRefresh(true)
 		return IPCResponse{
 			Success: true,
 			Message: "Auto-refresh route enabled",
 		}
 
 	case ActionDisableAutoRefresh:
-		s.monitor.DisableAutoRefreshRoute()
+		s.coordinator.SetAutoRefresh(false)
 		return IPCResponse{
 			Success: true,
 			Message: "Auto-refresh route disabled",

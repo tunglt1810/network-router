@@ -14,11 +14,12 @@ import (
 
 // Daemon represents the main daemon process
 type Daemon struct {
-	config    *core.Config
-	state     *RouterState
-	monitor   *Monitor
-	ipcServer *IPCServer
-	dnsProxy  *core.DNSProxy
+	config          *core.Config
+	coordinator     *Coordinator
+	networkDetector *NetworkDetector
+	ipcServer       *IPCServer
+	dnsProxy        *core.DNSProxy
+	logManager      *LogManager
 }
 
 // NewDaemon creates a new daemon instance
@@ -28,27 +29,28 @@ func NewDaemon(configPath string) (*Daemon, error) {
 		return nil, err
 	}
 
-	state := NewRouterState()
+	routeManager := core.NewOSRouteManager()
+	networkDetector := NewNetworkDetector(config)
 
-	monitor := NewMonitor(config, state, nil) // Temporarily nil
-
+	var coordinator *Coordinator
 	dnsProxy := core.NewDNSProxy(config, func() *core.Router {
-		return monitor.Router
+		if coordinator != nil {
+			return coordinator.GetActiveRouter()
+		}
+		return nil
 	})
 
-	monitor.dnsProxy = dnsProxy // Assign back to monitor
-	ipcServer := NewIPCServer(monitor, state, dnsProxy)
-
-	// Sync initial state from config
-	state.SetDNSProxyEnabled(config.DNSProxyEnabled)
-	state.SetAutoRefreshRouteEnabled(config.AutoRefreshRoute)
+	coordinator = NewCoordinator(config, routeManager, dnsProxy, networkDetector.Observe())
+	ipcServer := NewIPCServer(coordinator)
+	logManager := NewLogManager()
 
 	return &Daemon{
-		config:    config,
-		state:     state,
-		monitor:   monitor,
-		ipcServer: ipcServer,
-		dnsProxy:  dnsProxy,
+		config:          config,
+		coordinator:     coordinator,
+		networkDetector: networkDetector,
+		ipcServer:       ipcServer,
+		dnsProxy:        dnsProxy,
+		logManager:      logManager,
 	}, nil
 }
 
@@ -61,9 +63,17 @@ func (d *Daemon) Run() error {
 
 	g, gCtx := errgroup.WithContext(ctx)
 
-	// Start network monitor
+	// Start log manager
+	d.logManager.Start()
+
+	// Start network detector
 	g.Go(func() error {
-		return d.monitor.Start(gCtx)
+		return d.networkDetector.Start(gCtx)
+	})
+
+	// Start coordinator
+	g.Go(func() error {
+		return d.coordinator.Start(gCtx)
 	})
 
 	// Start IPC server
@@ -76,9 +86,7 @@ func (d *Daemon) Run() error {
 		return d.handleSignals(gCtx, cancel)
 	})
 
-	// Start DNS Proxy if enabled
-	// MOVED TO MONITOR: Monitor will decide when to start DNS Proxy based on routing status
-	log.Printf("DNS Proxy configured: Enabled=%v, Port=%d (Managed by Monitor)", d.config.DNSProxyEnabled, d.config.DNSProxyPort)
+	log.Printf("DNS Proxy configured: Enabled=%v, Port=%d (Managed by Coordinator)", d.config.DNSProxyEnabled, d.config.DNSProxyPort)
 
 	log.Println("✓ Daemon started successfully")
 
@@ -122,6 +130,8 @@ func (d *Daemon) cleanup() error {
 	if d.dnsProxy != nil {
 		d.dnsProxy.Stop()
 	}
-
+	if d.logManager != nil {
+		d.logManager.Stop()
+	}
 	return nil
 }
