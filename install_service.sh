@@ -44,6 +44,7 @@ INSTALL_BIN_PATH="/usr/local/bin/$BINARY_NAME"
 CONFIG_SRC="./config.yaml"
 CONFIG_DIR="/usr/local/etc/network-router"
 CONFIG_DEST="$CONFIG_DIR/config.yaml"
+STATE_DIR="/usr/local/var/network-router"
 DAEMON_PLIST_SRC="./com.bez.network-router.plist"
 DAEMON_PLIST_DEST="/Library/LaunchDaemons/com.bez.network-router.plist"
 TRAY_PLIST_SRC="./com.bez.network-router.tray.plist"
@@ -98,6 +99,16 @@ if [ -f "$CONFIG_DEST" ]; then
 fi
 cp "$CONFIG_SRC" "$CONFIG_DEST"
 print_success "Config installed to $CONFIG_DEST"
+
+# 3.1 State directory. Routes the daemon installs are recorded here so they can
+# be removed after a restart or a crash. It must be a stable location: TMPDIR
+# differs between a root LaunchDaemon and an interactive sudo shell, which used
+# to make the daemon lose track of routes it had installed.
+print_step "Preparing state directory..."
+mkdir -p "$STATE_DIR"
+chmod 700 "$STATE_DIR"
+chown root:wheel "$STATE_DIR"
+print_success "State directory ready at $STATE_DIR"
 
 # 4. Install Service Definition
 print_step "Installing daemon service (root)..."

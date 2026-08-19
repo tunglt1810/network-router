@@ -20,11 +20,9 @@ network-router tray-enable
 *   **Background Daemon**: Runs as a system service (root), automatically starts with macOS.
 *   **System Tray Icon**: Graphical interface on the menu bar for easy control, no terminal required.
 *   **Auto-Switching**: Automatically detects when you plug/unplug iPhone USB Tethering or connect to Wifi to adjust the Routing Table immediately.
-*   **Split Tunneling**:
-    *   **Internet**: Routes external traffic through the fastest connection (e.g., USB Tethering).
-    *   **Internal**: Routes internal domains (`*.corp.com`) and private IPs (`192.168.x.x`) through Wifi.
+*   **Split Tunneling**: Destinations listed in `tether_domains` and `tether_cidrs` get host and network routes over the tethering connection. Everything else keeps using the system default route, untouched.
 *   **CLI Client**: Command-line interface to check status or toggle services easily.
-*   **DNS Proxy**: Perfect support for wildcard domain routing by intercepting DNS requests.
+*   **DNS Proxy**: Wildcard domain routing by intercepting DNS requests. Queries for tethered domains are resolved **over the tethered path** so that name resolution and traffic use the same network. Falls back to the system resolver rather than failing the query, and enforces IPv4 so traffic stays on the routed address family.
 *   **Auto Refresh**: Automatically updates domain IPs on a schedule (Cron).
 *   **Auto-disable on Clear**: Automatically disables auto-routing when routes are cleared to prevent unintended re-application.
 
@@ -32,15 +30,16 @@ network-router tray-enable
 
 *   **Daemon (`network-router daemon`)**:
     *   Runs with **root** privileges.
-    *   **NetworkDetector**: Polls for interface changes continuously.
+    *   **NetworkDetector**: Polls for interface changes and publishes an immutable snapshot that every other component reads. The DNS request path performs no interface discovery of its own.
     *   **StateCoordinator**: Central state machine that manages auto-routing rules and DNS Proxy lifecycle.
-    *   **RouteManager**: Safe abstraction layer executing `route` and `networksetup` commands.
+    *   **RouteApplier**: Sole owner of the installed routes and of the state file recording them at `/usr/local/var/network-router/state.yaml`, which lets a later run clean up after an unexpected shutdown.
+    *   **RouteManager**: Abstraction layer executing `route` commands.
     *   Opens an IPC socket at `/tmp/network-router.sock` to receive control commands.
 *   **Tray App (`network-router tray`)**:
     *   Runs with **user** privileges.
     *   Displays an icon in the menu bar.
     *   Communicates with the Daemon via Unix socket.
-    *   Control Menu: Enable/Disable, Apply, Clear, Status.
+    *   Control Menu: Status, Auto-Routing toggle, Apply, Refresh, Clear, DNS Proxy toggle, Auto Refresh toggle, Debug, Hide Icon, Quit.
 *   **Client (`network-router <cmd>`)**:
     *   User-executed commands to communicate with the Daemon via socket.
 
@@ -58,8 +57,9 @@ The script will automatically:
 - ✅ Build binary from source code
 - ✅ Install to `/usr/local/bin/network-router`
 - ✅ Install config file to `/usr/local/etc/network-router/`
+- ✅ Create the state directory `/usr/local/var/network-router/`
 - ✅ Register and start daemon service (LaunchDaemon)
-- ✅ Install tray app configuration (LaunchAgent)
+- ✅ Install tray app configuration (LaunchAgent, opt-in)
 - ✅ Run health check to verify service
 
 ### Method 2: Manual Installation (Step-by-step)
@@ -81,11 +81,12 @@ sudo ./install_service.sh
 The installation script will:
 1.  Build the `network-router` binary and copy it to `/usr/local/bin/`.
 2.  Create a configuration directory at `/usr/local/etc/network-router/`.
-3.  Install the daemon service into `/Library/LaunchDaemons/`.
-4.  **Install the tray app configuration** in `~/Library/LaunchAgents/` (Disabled by default).
-5.  Start the daemon service immediately.
+3.  Create the state directory `/usr/local/var/network-router/`, where installed routes are recorded.
+4.  Install the daemon service into `/Library/LaunchDaemons/`.
+5.  Install the tray app template under `/usr/local/etc/network-router/`.
+6.  Start the daemon service immediately.
 
-**Note:** The tray icon will automatically appear in the menu bar after installation! 🎉
+**Note:** The tray icon is opt-in. Turn it on with `network-router tray-enable`.
 
 ### 2. Verify Operation
 
@@ -105,23 +106,33 @@ The configuration file is located at:
 You can edit this file to add company domains or IP ranges:
 
 ```yaml
-# Internal domains that should go through Wifi
-internal_domains:
-  - "*.internal.company.com"
-  - "gitlab.local"
-
-# Internal IP ranges that should go through Wifi
-internal_cidrs:
-  - "192.168.1.0/24"
-  - "10.0.0.0/8"
-
-# Interface names (usually no need to change on English macOS)
-wifi_interface_name: "en0"
-phone_interface_name: "en8"
+# Service / hardware-port keywords, matched case-insensitively.
+# These are NOT device numbers: do not put "en0" or "en8" here.
+# Leave them commented out for automatic discovery.
+# wifi_interface_name: "Wi-Fi"
+# phone_interface_name: "iPhone USB"
 
 # DNS Proxy configuration to support Wildcard Domains
 dns_proxy_enabled: true
 dns_proxy_port: 5454
+
+# The proxy resolves tethered domains over the phone path, so name resolution and
+# traffic use the same network. Upstreams are preferred in this order:
+#   1. the DNS server the phone advertises over DHCP
+#   2. dns_upstream_pinned below, each given a /32 route over the phone
+#   3. the system resolver, as a degraded fallback that installs no routes
+# Note: pinning resolvers to the phone sends DNS queries over cellular data.
+dns_upstream_pinned:
+  - 1.1.1.1:53
+  - 8.8.8.8:53
+
+# Leave empty to use the order above. Setting a value overrides it entirely.
+dns_upstream: ''
+
+# Answer AAAA/HTTPS/SVCB for tethered domains with an empty NOERROR so clients use
+# the A records the /32 routes cover. Those query types would otherwise let a
+# client connect over an address family that is not routed.
+force_ipv4: true
 
 # Automatically refresh routing on a schedule (Cron syntax)
 route_refresh_cron: '0 * * * *'
@@ -136,9 +147,11 @@ tether_domains:
   - 'pplx.ai'
   - '*.pplx.ai'
 
-# List of IP ranges to route through Phone (Tethering)
+# List of IP ranges to route through Phone (Tethering).
+# Bare IP addresses belong here, not in tether_domains.
 tether_cidrs:
   - '91.108.4.0/22'
+  - '34.2.135.176/32'
 ```
 
 **Note:** After editing the configuration file, you need to restart the service to apply changes:
@@ -174,11 +187,15 @@ network-router tray-disable
 *   **Clear Routes**: Remove all routes.
 *   **Enable/Disable DNS Proxy**: Toggle internal DNS Proxy.
 *   **Enable/Disable Auto Refresh**: Toggle scheduled route updates.
-*   **Show Debug**: Opens Terminal (or iTerm2) and runs `tail -f` to watch logs in real-time.
-*   **Hide Icon**: Hides the icon from the menu bar (still runs in background).
+*   **Show Debug**: Opens Terminal and runs `tail -f` to watch logs in real-time.
+*   **Hide Icon**: Makes the icon invisible. Its menu bar slot stays in place and remains clickable, which is how you get the menu back to show it again.
 *   **Quit**: Stops the tray app (can be restarted with `network-router tray`).
 
+Menu actions post a native macOS notification on success or failure, and mirror the same text to `/tmp/network-router-tray.log`.
+
 **Managing Tray App:**
+
+```bash
 # Check status
 launchctl list | grep network-router.tray
 
@@ -218,9 +235,25 @@ network-router tray-disable  # Stop and unregister tray icon
 #### Manual Application (Apply/Clear)
 Force the routing logic immediately (useful for testing new configs without waiting for auto-detect).
 ```bash
-network-router apply   # Add routes
-network-router clear   # Remove routes, return to default
+network-router apply    # Add routes
+network-router clear    # Remove routes, return to default
+network-router restart  # Clear then apply
+network-router refresh  # Re-resolve domains and re-apply
 ```
+
+Note that `clear` also turns auto-routing off, so the next network event does not
+immediately re-apply. Use `enable` to turn it back on.
+
+#### DNS Proxy and Scheduled Refresh
+```bash
+network-router enable-dns             # Start the DNS proxy
+network-router disable-dns            # Stop the DNS proxy
+network-router enable-auto-refresh    # Turn on the cron-driven refresh
+network-router disable-auto-refresh   # Turn it off
+```
+
+The auto-refresh setting is held in memory only. Set `auto_refresh_route` in the
+config file to change the startup default.
 
 ## Common Scenarios
 
@@ -230,10 +263,10 @@ network-router clear   # Remove routes, return to default
 3. Connect corporate WiFi for internal network access
 4. ✅ Routes are applied automatically, traffic is separated
 
-### Scenario 2: Coffee Shop (No corporate WiFi)
+### Scenario 2: Coffee Shop (WiFi only, no tethering)
 1. Only connect to shop WiFi
-2. Routes are not applied (no matching WiFi name)
-3. Traffic goes through default gateway as normal
+2. Routes are not applied, because no tethering interface is ready
+3. Traffic goes through the default gateway as normal
 
 ### Scenario 3: Office (WiFi only)
 1. Unplug iPhone USB
@@ -254,8 +287,8 @@ make daemon
 # Run tray app locally
 make tray
 
-# Test icon generation
-make test-icons
+# Vet and run the test suite with the race detector
+make test
 
 # Clean build artifacts
 make clear-build
@@ -350,6 +383,34 @@ tail -f /var/log/network-router.log
 # Or use "Show Debug" in Tray Menu to open terminal quickly.
 ```
 
+### Tethered Domains Fail to Resolve
+
+Each domain in `tether_domains` has the proxy as its only resolver, so a proxy
+problem appears as a connection failure rather than a slow lookup.
+
+```bash
+# Is the proxy listening?
+sudo lsof -nP -iUDP:5454 -iTCP:5454
+
+# Ask the proxy directly
+dig @127.0.0.1 -p 5454 <configured-domain> A
+
+# Compare the two paths, substituting your own device names
+dig @"$(ipconfig getoption en0 domain_name_server)" <configured-domain> A
+dig @"$(ipconfig getoption en7 domain_name_server)" <configured-domain> A
+
+# Any upstream problems, or answers served from the degraded fallback?
+grep -E "Resolution failed|system resolver" /var/log/network-router.log | tail
+```
+
+The daemon removes its own generated resolver files at startup. To clear them by
+hand:
+
+```bash
+sudo grep -l "# Generated by Network Router" /etc/resolver/* | xargs sudo rm
+sudo killall -HUP mDNSResponder
+```
+
 ### Viewing Logs
 
 ```bash
@@ -386,7 +447,11 @@ sudo rm /Library/LaunchDaemons/com.bez.network-router.plist
 rm ~/Library/LaunchAgents/com.bez.network-router.tray.plist
 sudo rm /usr/local/bin/network-router
 sudo rm -rf /usr/local/etc/network-router
+sudo rm -rf /usr/local/var/network-router
 sudo rm /tmp/network-router.sock 2>/dev/null || true
+
+# Remove generated resolver files
+sudo grep -l "# Generated by Network Router" /etc/resolver/* 2>/dev/null | xargs sudo rm
 
 echo "✅ Uninstall completed."
 ```

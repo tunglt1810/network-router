@@ -35,31 +35,42 @@
 │  ┌─────────────────┴─────────────────────────────────┐          │
 │  │          Network Router Daemon (Root)             │          │
 │  │                                                   │          │
-│  │  ┌──────────────┐  ┌───────────────┐              │          │
-│  │  │   Monitor    │  │  Router Core  │              │          │
-│  │  │              │  │               │              │          │
-│  │  │ • Network    │  │ • Route Mgmt  │              │          │
-│  │  │   Changes    │  │ • DNS Resolve │              │          │
-│  │  │ • Interface  │  │ • CIDR Routes │              │          │
-│  │  │   Detection  │  │               │              │          │
-│  │  └──────┬───────┘  └───────┬───────┘              │          │
-│  │         │                  │                      │          │
-│  │         v                  v                      │          │
-│  │    ┌────────────────────────────┐                 │          │
-│  │    │      State Manager         │                 │          │
-│  │    │  • auto_routing_enabled    │                 │          │
-│  │    │  • routes_applied          │                 │          │
-│  │    │  • last_applied_at         │                 │          │
-│  │    └────────────────────────────┘                 │          │
-│  └─────────────────┬─────────────────────────────────┘          │
-│                    │                                            │
-│                    v                                            │
+│  │  ┌──────────────────┐  ┌────────────────────┐    │          │
+│  │  │ NetworkDetector  │  │      DNSProxy      │    │          │
+│  │  │                  │  │                    │    │          │
+│  │  │ • Poll every 5s  │  │ • udp+tcp loopback  │   │          │
+│  │  │ • Interface      │  │ • force_ipv4 gate  │    │          │
+│  │  │   discovery      │  │ • answer cache     │    │          │
+│  │  └────────┬─────────┘  └──────────┬─────────┘    │          │
+│  │           │ publish               │ resolve      │          │
+│  │           v                       v              │          │
+│  │  ┌──────────────────┐  ┌────────────────────┐    │          │
+│  │  │  SnapshotStore   │  │  UpstreamResolver  │    │          │
+│  │  │  (atomic ptr)    │←─┤  phone → pinned →  │    │          │
+│  │  └────────┬─────────┘  │  degraded          │    │          │
+│  │           │            └──────────┬─────────┘    │          │
+│  │           v                       │ submit       │          │
+│  │  ┌──────────────────┐             │              │          │
+│  │  │   Coordinator    │             │              │          │
+│  │  │ • auto_routing   │             │              │          │
+│  │  │ • routes_applied │             │              │          │
+│  │  └────────┬─────────┘             │              │          │
+│  │           v                       v              │          │
+│  │  ┌──────────────────┐  ┌────────────────────┐    │          │
+│  │  │      Router      │─►│    RouteApplier    │    │          │
+│  │  │ • route plan     │  │ • sole route owner │    │          │
+│  │  │ • DNS resolve    │  │ • state.yaml       │    │          │
+│  │  └──────────────────┘  └──────────┬─────────┘    │          │
+│  └─────────────────────────────────── │ ────────────┘          │
+│                                       │                        │
+│                                       v                        │
 │         ┌──────────────────────┐                                │
 │         │   macOS Networking   │                                │
 │         │                      │                                │
 │         │  • route command     │                                │
 │         │  • networksetup      │                                │
-│         │  • DNS resolution    │                                │
+│         │  • ipconfig          │                                │
+│         │  • /etc/resolver     │                                │
 │         └──────────────────────┘                                │
 │                    │                                            │
 │                    v                                            │
@@ -76,15 +87,16 @@
 ## Component Details
 
 ### 1. Daemon (Root Process)
-- **File**: `daemon/daemon.go`, `daemon/monitor.go`, `daemon/state.go`
+- **Files**: `daemon/daemon.go`, `daemon/coordinator.go`, `daemon/network_detector.go`
 - **Runs as**: root (via launchd)
 - **Config**: `/usr/local/etc/network-router/config.yaml`
+- **State**: `/usr/local/var/network-router/state.yaml`
 - **Responsibilities**:
-  - Monitor network changes
-  - Detect WiFi and Phone interfaces
-  - Apply/clear routing rules
-  - Resolve internal domains
-  - Maintain routing state
+  - Reconcile resolver files and routes left by a previous run, before anything else
+  - Detect WiFi and Phone interfaces and publish the result
+  - Apply and clear routing rules
+  - Resolve configured domains
+  - Own DNS proxy and refresh-schedule lifecycle
 
 ### 2. IPC Server
 - **File**: `daemon/ipc.go`
@@ -125,33 +137,105 @@
 ### 6. Router Core
 - **Files**: `pkg/core/router.go`, `pkg/utils/*.go`
 - **Responsibilities**:
-  - Execute route commands
-  - Resolve domain to IPs
-  - Handle CIDR ranges
-  - Interface detection
+  - Build the route plan from configuration
+  - Resolve non-wildcard domains to IPs. Wildcard patterns are excluded, since the
+    base of `*.example.com` resolves to an address its subdomains need not use.
+    Wildcards are handled at request time by the DNS proxy.
+  - Refresh interface discovery immediately before applying
+- **Never touches the default route.** Only host and network routes are installed.
+
+### 7. RouteApplier
+- **File**: `pkg/core/route_applier.go`
+- **Role**: the single writer for every route the product installs and for the
+  state file at `/usr/local/var/network-router/state.yaml`. The DNS request path
+  only enqueues hosts, so answering a query never waits on the routing table.
+- **Behaviour**:
+  - Tracks applied destinations in a set, so repeat answers cost a lookup
+  - Treats an already-present route as installed and records it for cleanup
+  - Validates the gateway and the destination before running `route`
+  - Persists debounced, writing atomically via temp file plus rename
+  - `ReconcileFromState()` removes routes recorded by a previous run
+
+### 8. DNS Proxy and UpstreamResolver
+- **Files**: `pkg/core/dns_proxy.go`, `pkg/core/upstream.go`, `pkg/core/dnscache.go`
+- **Listens**: `127.0.0.1:<dns_proxy_port>` on **both UDP and TCP**. The TCP
+  listener is required because macOS retries over TCP when a reply is truncated.
+- **Scope**: the proxy performs no domain matching. macOS forwards a query here
+  only when a file in `/etc/resolver` covers the name, and such a file covers the
+  entire subtree beneath it, so the resolver files are the complete scope
+  definition and every query arriving here is in scope by construction.
+- **Upstream order**:
+  1. the DNS server the phone advertises over DHCP
+  2. pinned public resolvers, each given a `/32` route over the phone
+  3. the system resolver, degraded — the answer is returned but marked unroutable
+
+  A configured domain is routed over the phone because Wi-Fi is not the desired
+  path for it, so name resolution has to travel the same way. Candidates are
+  raced with a 250 ms stagger, which keeps the common case at one query while
+  bounding the cost of an unreachable candidate.
+- **Fail-open**: `/etc/resolver/<domain>` makes this proxy the sole resolver for
+  the names it covers, so a degraded answer leaves the client able to connect
+  where a failure response would not.
+- **IPv4 enforcement**: AAAA, HTTPS and SVCB are answered with an empty NOERROR
+  when `force_ipv4` is on. Those types let a client reach a host without the A
+  records that host routes are installed for.
+- **Lifecycle**: listeners are bound and confirmed serving *before* any resolver
+  file is written, so resolver files exist only while the port they name is being
+  served. `Start`/`Stop` are mutex-guarded and idempotent. `ReconcileResolvers()`
+  deletes generated resolver files recorded by an earlier process.
+
+### 9. SnapshotStore
+- **File**: `pkg/core/network.go`
+- **Role**: `NetworkDetector` is the only writer; every other component reads the
+  latest immutable `NetworkSnapshot` through an atomic pointer, so reported status
+  matches the state routing decisions used.
 
 ## Data Flow
 
 ### Status Check Flow
 ```
-User → Tray/CLI → IPC Socket → Daemon → State Manager → Response
-                                               ↓
-                                        Check network state
+User → Tray/CLI → IPC Socket → Coordinator → SnapshotStore + lifecycle flags
+                                                      ↓
+                                                  Response
 ```
 
 ### Route Application Flow
 ```
-User → Tray/CLI → IPC Socket → Daemon → Router Core → macOS route cmd
-                                               ↓
-                                        Update state
+User → Tray/CLI → IPC Socket → Coordinator → Router → RouteApplier → route cmd
+                                                            ↓
+                                                    state.yaml (debounced)
 ```
 
 ### Network Change Flow
 ```
-macOS Network Change → Monitor → Router Core → Apply routes
-                                        ↓
-                                  Update state
+macOS Network Change → NetworkDetector → SnapshotStore (atomic)
+                              ↓
+                        Coordinator → Router → RouteApplier → route cmd
 ```
+
+### DNS Request Flow
+```
+App → mDNSResponder → /etc/resolver/<domain> → 127.0.0.1:5454 (udp+tcp)
+                                                      ↓
+                              force_ipv4 gate (AAAA/HTTPS/SVCB → empty NOERROR)
+                                                      ↓
+                                                  DNS cache
+                                                      ↓
+                              UpstreamResolver: phone DNS → pinned → degraded
+                                                      ↓
+                              reply to client  ┄┄┄┄┄┄┄→ RouteApplier.Submit (async)
+```
+The reply is not gated on the routing table. The applier reads the phone gateway
+from the SnapshotStore, so no subprocess runs on the request path.
+
+### Startup Reconciliation Flow
+```
+daemon start → ReconcileResolvers()         (delete generated /etc/resolver files)
+             → applier.ReconcileFromState() (delete routes recorded by a prior run)
+             → normal operation
+```
+
+
 
 ## Security Notes
 

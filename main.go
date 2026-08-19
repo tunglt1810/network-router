@@ -45,10 +45,16 @@ func main() {
 		runClientCommand("clear")
 	case "restart":
 		runClientCommand("restart")
+	case "refresh":
+		runClientCommand("refresh")
 	case "enable-dns":
 		runClientCommand("enable-dns")
 	case "disable-dns":
 		runClientCommand("disable-dns")
+	case "enable-auto-refresh":
+		runClientCommand("enable-auto-refresh")
+	case "disable-auto-refresh":
+		runClientCommand("disable-auto-refresh")
 	case "tray-enable":
 		runTrayEnable()
 	case "tray-disable":
@@ -100,10 +106,18 @@ func runClientCommand(command string) {
 		err = c.Clear()
 	case "restart":
 		err = c.Restart()
+	case "refresh":
+		err = c.Refresh()
 	case "enable-dns":
 		err = c.EnableDNSProxy()
 	case "disable-dns":
 		err = c.DisableDNSProxy()
+	case "enable-auto-refresh":
+		err = c.EnableAutoRefresh()
+	case "disable-auto-refresh":
+		err = c.DisableAutoRefresh()
+	default:
+		err = fmt.Errorf("unhandled client command: %s", command)
 	}
 
 	if err != nil {
@@ -181,23 +195,26 @@ func printUsage() {
 	fmt.Println("  network-router <command> [options]")
 	fmt.Println()
 	fmt.Println("Commands:")
-	fmt.Println("  daemon [options]    Start the routing daemon")
-	fmt.Println("    -config string      Path to config file (default: config.yaml)")
+	fmt.Println("  daemon [options]      Start the routing daemon")
+	fmt.Println("    -config string        Path to config file (default: config.yaml)")
 	fmt.Println()
-	fmt.Println("  tray                Start the system tray application")
+	fmt.Println("  tray                  Start the system tray application")
 	fmt.Println()
-	fmt.Println("  status              Show daemon status")
-	fmt.Println("  enable              Enable auto-routing")
-	fmt.Println("  disable             Disable auto-routing")
-	fmt.Println("  apply               Force apply routes now")
-	fmt.Println("  clear               Force clear routes now")
-	fmt.Println("  restart             Clear and re-apply routes")
-	fmt.Println("  enable-dns          Enable DNS Proxy")
-	fmt.Println("  disable-dns         Disable DNS Proxy")
-	fmt.Println("  tray-enable         Register and start the tray icon")
-	fmt.Println("  tray-disable        Stop and unregister the tray icon")
+	fmt.Println("  status                Show daemon status")
+	fmt.Println("  enable                Enable auto-routing")
+	fmt.Println("  disable               Disable auto-routing")
+	fmt.Println("  apply                 Force apply routes now")
+	fmt.Println("  clear                 Force clear routes now")
+	fmt.Println("  restart               Clear and re-apply routes")
+	fmt.Println("  refresh               Re-resolve domains and re-apply routes")
+	fmt.Println("  enable-dns            Enable DNS Proxy")
+	fmt.Println("  disable-dns           Disable DNS Proxy")
+	fmt.Println("  enable-auto-refresh   Enable the scheduled route refresh")
+	fmt.Println("  disable-auto-refresh  Disable the scheduled route refresh")
+	fmt.Println("  tray-enable           Register and start the tray icon")
+	fmt.Println("  tray-disable          Stop and unregister the tray icon")
 	fmt.Println()
-	fmt.Println("  help                Show this help message")
+	fmt.Println("  help                  Show this help message")
 	fmt.Println()
 	fmt.Println("Examples:")
 	fmt.Println("  sudo ./network-router daemon")

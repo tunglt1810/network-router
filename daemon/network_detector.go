@@ -2,37 +2,44 @@ package daemon
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"time"
 
 	"network-router/pkg/core"
-	"network-router/pkg/utils"
 )
 
-// NetworkEvent is emitted when the network status is checked
-type NetworkEvent struct {
-	WifiActive  bool
-	PhoneActive bool
-}
-
-// NetworkDetector periodically polls the OS for network interface changes
-// and emits NetworkEvents.
+// NetworkDetector periodically polls the OS for network interface changes,
+// publishes the result to the shared SnapshotStore, and notifies the coordinator.
+//
+// Publishing to the store is what lets the DNS request path read the current
+// routing target without shelling out to networksetup/ifconfig per answer.
 type NetworkDetector struct {
 	config        *core.Config
+	provider      core.NetworkProvider
+	snapshots     *core.SnapshotStore
 	checkInterval time.Duration
-	events        chan NetworkEvent
+	events        chan *core.NetworkSnapshot
 }
 
-func NewNetworkDetector(config *core.Config) *NetworkDetector {
+func NewNetworkDetector(config *core.Config, provider core.NetworkProvider, snapshots *core.SnapshotStore) *NetworkDetector {
+	if provider == nil {
+		provider = core.NewOSNetworkProvider()
+	}
+	if snapshots == nil {
+		snapshots = core.NewSnapshotStore()
+	}
 	return &NetworkDetector{
 		config:        config,
+		provider:      provider,
+		snapshots:     snapshots,
 		checkInterval: 5 * time.Second,
-		events:        make(chan NetworkEvent, 1),
+		events:        make(chan *core.NetworkSnapshot, 1),
 	}
 }
 
-// Observe returns a read-only channel for NetworkEvents
-func (d *NetworkDetector) Observe() <-chan NetworkEvent {
+// Observe returns a read-only channel of network snapshots.
+func (d *NetworkDetector) Observe() <-chan *core.NetworkSnapshot {
 	return d.events
 }
 
@@ -41,7 +48,6 @@ func (d *NetworkDetector) Start(ctx context.Context) error {
 	ticker := time.NewTicker(d.checkInterval)
 	defer ticker.Stop()
 
-	// Initial check
 	d.check()
 
 	for {
@@ -56,43 +62,30 @@ func (d *NetworkDetector) Start(ctx context.Context) error {
 }
 
 func (d *NetworkDetector) check() {
-	interfaces, err := utils.GetNetworkInterfaces()
+	snapshot, err := core.DiscoverNetwork(d.config, d.provider)
 	if err != nil {
 		log.Printf("Network check error: %v", err)
-		return
+		snapshot = &core.NetworkSnapshot{
+			PhoneReason: fmt.Sprintf("network discovery failed: %v", err),
+		}
 	}
 
-	wifiKw := d.config.WifiInterfaceKeyword
-	if wifiKw == "" {
-		wifiKw = "Wi-Fi"
-	}
-	phoneKw := d.config.PhoneInterfaceKeyword
-	if phoneKw == "" {
-		phoneKw = "iPhone USB"
-	}
+	d.snapshots.Store(snapshot)
+	d.emit(snapshot)
+}
 
-	wifiIface := utils.FindInterfaceByName(interfaces, []string{wifiKw, "Wi-Fi"})
-	phoneIface := utils.FindInterfaceByName(interfaces, []string{phoneKw, "iPhone USB", "iPad USB", "RNDIS"})
-
-	wifiActive := false
-	phoneActive := false
-
-	if wifiIface != nil {
-		wifiActive = utils.IsInterfaceActive(wifiIface.DeviceName)
-	}
-	if phoneIface != nil {
-		phoneActive = utils.IsInterfaceActive(phoneIface.DeviceName)
-	}
-
-	// Send event non-blocking (replace old event if channel is full)
+func (d *NetworkDetector) emit(snapshot *core.NetworkSnapshot) {
+	// Keep only the newest snapshot: an older one is never useful.
 	select {
-	case d.events <- NetworkEvent{WifiActive: wifiActive, PhoneActive: phoneActive}:
+	case d.events <- snapshot:
 	default:
-		// Drain and replace
 		select {
 		case <-d.events:
 		default:
 		}
-		d.events <- NetworkEvent{WifiActive: wifiActive, PhoneActive: phoneActive}
+		select {
+		case d.events <- snapshot:
+		default:
+		}
 	}
 }

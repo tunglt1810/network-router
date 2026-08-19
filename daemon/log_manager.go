@@ -7,8 +7,7 @@ import (
 	"github.com/robfig/cron/v3"
 )
 
-// LogManager handles log rotation and cleanup.
-// It replaces the log rotation logic that was previously coupled in Monitor.
+// LogManager truncates the daemon log on a daily schedule.
 type LogManager struct {
 	cron *cron.Cron
 }

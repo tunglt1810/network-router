@@ -1,32 +1,35 @@
-# Cấu hình cho Network Router CLI
+# Network Router configuration
 
-# Tự động refresh routing theo lịch (Cron syntax)
-# Ví dụ: mỗi 30 phút ("*/30 * * * *") hoặc mỗi giờ ("0 * * * *")
-# Để trống để tắt tính năng này
+# Scheduled routing refresh (cron syntax).
+# Examples: every 30 minutes ("*/30 * * * *") or hourly ("0 * * * *").
+# Leave empty to disable scheduling.
 route_refresh_cron: '0 * * * *'
 auto_refresh_route: false
 
-# Danh sách các domain routing qua Phone (Tethering)
-# Wildcard được hỗ trợ ví dụ: *.internal.com
+# Domains routed through the phone (tethering) connection.
+# Wildcards are supported, e.g. '*.internal.com'.
+#
+# A resolver file covers the whole subtree beneath its name, so 'example.com' and
+# '*.example.com' are equivalent here.
 tether_domains:
-  - '*.github.com'
+  # - '*.github.com'
   # Github Copilot
   # Authentication domains (critical for agent mode)
-  - 'vscode-auth.github.com'
-  - 'api.github.com'
+  # - 'vscode-auth.github.com'
+  # - 'api.github.com'
 
   # Copilot API endpoints
-  - '*.githubcopilot.com'
-  - 'copilot-proxy.githubusercontent.com'
-  - 'copilot-telemetry.githubusercontent.com'
-  - 'origin-tracker.githubusercontent.com'
+  # - '*.githubcopilot.com'
+  # - 'copilot-proxy.githubusercontent.com'
+  # - 'copilot-telemetry.githubusercontent.com'
+  # - 'origin-tracker.githubusercontent.com'
 
   # Telemetry and tracking
   # - 'collector.github.com'
-  - 'default.exp-tas.com'
+  # - 'default.exp-tas.com'
 
   # Static assets
-  - 'github.githubassets.com'
+  # - 'github.githubassets.com'
 
   # Antigravity (Google AI)
   # Authentication domains (critical for OAuth)
@@ -44,13 +47,13 @@ tether_domains:
   - 'generativelanguage.googleapis.com'
   - 'googleapis.com'
   - '*.googleapis.com'
-  - 'gemini.google.com'
+  # - 'gemini.google.com'
   - 'codeassist.googleapis.com'
   - 'cloudaicompanion.googleapis.com'
   - 'aiplatform.googleapis.com'
 
   # Google
-  - 'google.com'
+  # - 'google.com'
   - 'mail.google.com'
   - 'gmail.com'
   - 'imap.gmail.com'
@@ -61,10 +64,11 @@ tether_domains:
   - 'googleusercontent.com'
   - 'ssl.gstatic.com'
   - 'gstatic.com'
-  - '*.googlevideo.com'
+  # - '*.googlevideo.com'
   - 'music.youtube.com'
-  - 'youtube.com'
+  # - 'youtube.com'
   - 'ssh.cloud.google.com'
+  - 'stitch.withgoogle.com'
 
   # Apple
   - 'appleid.apple.com'
@@ -78,11 +82,11 @@ tether_domains:
   - 'apple.com'
 
   # Anthropic (Claude & Claude Code)
-  - 'anthropic.com'
-  - '*.anthropic.com'
-  - 'claude.ai'
-  - '*.claude.ai'
-  - 'claude.sh'
+  # - 'anthropic.com'
+  # - '*.anthropic.com'
+  # - 'claude.ai'
+  # - '*.claude.ai'
+  # - 'claude.sh'
 
   # Telegram
   - 't.me'
@@ -102,14 +106,28 @@ tether_domains:
   - 'nhncorp.jp'
 
   # Comet Browser (Perplexity)
-  - 'perplexity.ai'
-  - '*.perplexity.ai'
-  - 'pplx.ai'
-  - '*.pplx.ai'
+  # - 'perplexity.ai'
+  # - '*.perplexity.ai'
+  # - 'pplx.ai'
+  # - '*.pplx.ai'
 
-# Danh sách các dải IP sẽ đi qua Phone (Tethering)
+  # China AI providers
+  - api.deepseek.com
+  - token-plan-sgp.xiaomimimo.com
+
+  # Kiro
+  - '*.kiro.dev'
+  - '*.amazonaws.com' # All AWS service endpoints (Kiro service, RUM, OIDC, SSO, Cognito)
+
+# IP ranges routed through the phone (tethering) connection.
+#
+# Bare IP addresses belong here, not in tether_domains: a file in /etc/resolver
+# named after an IP address has no effect.
 tether_cidrs:
-  # Telegram CIDRs (More reliable than domain resolution)
+  - '34.2.135.176/32'
+  - '94.136.186.73/32'
+
+  # Telegram CIDRs (more reliable than domain resolution)
   - '91.108.4.0/22'
   - '91.108.8.0/22'
   - '91.108.12.0/22'
@@ -119,10 +137,34 @@ tether_cidrs:
   - '91.105.192.0/23'
   - '149.154.160.0/20'
   - '185.76.151.0/24'
-# Tên interface (Optional - nếu để trống chương trình sẽ tự detect)
-# wifi_interface_name: "en0"
-# phone_interface_name: "en8"
 
-# Cấu hình DNS Proxy để hỗ trợ Wildcard Domain
+# Interface service keywords (optional; leave commented out for automatic discovery).
+# These are service/hardware-port keywords, not device numbers such as en0 or en8.
+# wifi_interface_name: "Wi-Fi"
+# phone_interface_name: "iPhone USB"
+# The iPhone USB service must have a usable IPv4 address and Router on macOS.
+
+# DNS proxy, which is what makes wildcard domains work.
 dns_proxy_enabled: true
 dns_proxy_port: 5454
+
+# The proxy resolves the domains above over the PHONE path, so name resolution and
+# traffic travel the same network.
+#
+# Upstream preference order:
+#   1. the DNS server the phone advertises over DHCP
+#   2. dns_upstream_pinned below, each given a /32 route over the phone
+#   3. the system resolver (degraded) - still answers, but installs NO routes
+#
+# Note: routing these resolvers over the phone sends DNS queries over cellular data.
+dns_upstream_pinned:
+  - 1.1.1.1:53
+  - 8.8.8.8:53
+
+# Leave empty to use the order above. Setting a value overrides it entirely.
+dns_upstream: ''
+
+# Answer AAAA/HTTPS/SVCB for tethered domains with an empty NOERROR, forcing clients
+# onto the A records that the /32 routes cover. Those query types let a client
+# connect over an address that is not routed, so disabling this reopens that path.
+force_ipv4: true

@@ -13,6 +13,10 @@ import (
 	"github.com/getlantern/systray"
 )
 
+// hideIconTooltip describes what hiding actually does: the icon is replaced by a
+// transparent pixel, so its menu bar slot remains clickable.
+const hideIconTooltip = "Make the icon invisible; its menu bar slot stays clickable"
+
 // TrayApp manages the system tray application
 type TrayApp struct {
 	client     *client.Client
@@ -29,7 +33,6 @@ type TrayApp struct {
 	mAutoRefresh *systray.MenuItem
 	mDebug       *systray.MenuItem
 	mHideIcon    *systray.MenuItem
-	mSeparator   *systray.MenuItem
 	mQuit        *systray.MenuItem
 }
 
@@ -70,7 +73,7 @@ func (t *TrayApp) onReady() {
 
 	systray.AddSeparator()
 
-	t.mHideIcon = systray.AddMenuItem("🕶️ Hide Icon", "Hide tray icon (show with Cmd+Opt+Shift+R)")
+	t.mHideIcon = systray.AddMenuItem("🕶️ Hide Icon", hideIconTooltip)
 
 	systray.AddSeparator()
 
@@ -149,6 +152,9 @@ func (t *TrayApp) updateStatus() {
 		formatBool(autoRouting), formatBool(routesApplied))
 	tooltip := fmt.Sprintf("WiFi: %v | Phone: %v",
 		formatBool(wifiActive), formatBool(phoneActive))
+	if resp.Data.PhoneStatusReason != "" {
+		tooltip = fmt.Sprintf("%s | %s", tooltip, resp.Data.PhoneStatusReason)
+	}
 
 	t.mStatus.SetTitle(statusText)
 	t.mStatus.SetTooltip(tooltip)
@@ -350,11 +356,12 @@ func (t *TrayApp) handleHideIcon() {
 	t.iconHidden = !t.iconHidden
 
 	if t.iconHidden {
-		// Hide icon by setting it to a transparent 1x1 pixel
+		// The icon becomes a transparent 1x1 pixel. The menu bar slot is still
+		// there and still clickable, which is how the menu stays reachable.
 		systray.SetIcon(assets.IconHidden())
 		t.mHideIcon.SetTitle("🕶️ Show Icon")
-		t.mHideIcon.SetTooltip("Show tray icon")
-		log.Println("Icon hidden - use menu or hotkey to show")
+		t.mHideIcon.SetTooltip("Show the tray icon again")
+		log.Println("Icon hidden - its menu bar slot is still clickable")
 	} else {
 		// Restore icon based on current state
 		if t.lastStatus != nil && t.lastStatus.Success && t.lastStatus.Data != nil {
@@ -369,7 +376,7 @@ func (t *TrayApp) handleHideIcon() {
 			t.updateIcon(false, false)
 		}
 		t.mHideIcon.SetTitle("🕶️ Hide Icon")
-		t.mHideIcon.SetTooltip("Hide tray icon (show with Cmd+Opt+Shift+R)")
+		t.mHideIcon.SetTooltip(hideIconTooltip)
 		log.Println("Icon shown")
 	}
 }
@@ -391,11 +398,23 @@ func (t *TrayApp) handleDebug() {
 	}
 }
 
-// showNotification shows a notification (placeholder - could use native notifications)
+// showNotification posts a native macOS notification and mirrors it to the log.
+//
+// The title and message are passed to osascript as run arguments rather than
+// interpolated into the script source, so quotes and backslashes in a daemon
+// error message cannot break or alter the script.
 func (t *TrayApp) showNotification(title, message string) {
 	log.Printf("[%s] %s", title, message)
-	// On macOS, you could use osascript for notifications:
-	// exec.Command("osascript", "-e", fmt.Sprintf(`display notification "%s" with title "%s"`, message, title)).Run()
+
+	cmd := exec.Command("osascript",
+		"-e", "on run argv",
+		"-e", "display notification (item 1 of argv) with title (item 2 of argv)",
+		"-e", "end run",
+		message, fmt.Sprintf("Network Router - %s", title),
+	)
+	if err := cmd.Run(); err != nil {
+		log.Printf("Could not post notification: %v", err)
+	}
 }
 
 // formatBool formats a boolean as ✓/✗

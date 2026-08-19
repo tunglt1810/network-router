@@ -10,16 +10,8 @@ func NewOSRouteManager() *OSRouteManager {
 	return &OSRouteManager{}
 }
 
-func (m *OSRouteManager) AddRoute(destination string, interfaceName string) error {
-	return utils.AddRoute(destination, interfaceName)
-}
-
 func (m *OSRouteManager) AddRouteViaGateway(destination string, gatewayIP string) error {
 	return utils.AddRouteViaGateway(destination, gatewayIP)
-}
-
-func (m *OSRouteManager) ChangeDefaultGateway(gatewayIP string) error {
-	return utils.ChangeDefaultGateway(gatewayIP)
 }
 
 func (m *OSRouteManager) DeleteRoute(destination string) error {

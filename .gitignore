@@ -22,3 +22,4 @@ vendor/
 # OS cache files
 .DS_Store
 .resolved_ips.yaml
+/.tmp

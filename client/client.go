@@ -93,6 +93,14 @@ func (c *Client) Status() error {
 		fmt.Printf("Routes applied:   %v\n", data.RoutesApplied)
 		fmt.Printf("WiFi active:      %v\n", data.WifiActive)
 		fmt.Printf("Phone active:     %v\n", data.PhoneActive)
+		fmt.Printf("WiFi interface:   %s\n", data.WifiDevice)
+		fmt.Printf("Phone interface:  %s\n", data.PhoneDevice)
+		fmt.Printf("Phone gateway:    %s\n", data.PhoneGateway)
+		fmt.Printf("Phone ready:      %v\n", data.PhoneReady)
+		if data.PhoneStatusReason != "" {
+			fmt.Printf("Phone reason:     %s\n", data.PhoneStatusReason)
+		}
+		fmt.Printf("Active routes:    %d\n", data.ActiveRoutes)
 
 		if !data.LastAppliedAt.IsZero() {
 			fmt.Printf("Last applied:     %s\n", data.LastAppliedAt.Format(time.RFC3339))
@@ -182,6 +190,54 @@ func (c *Client) Restart() error {
 	}
 
 	fmt.Println("✓", resp.Message)
+	return nil
+}
+
+// Refresh re-resolves domains and re-applies routes
+func (c *Client) Refresh() error {
+	fmt.Println("Refreshing routes...")
+	resp, err := c.SendRequest(daemon.ActionRefresh, nil)
+	if err != nil {
+		return err
+	}
+
+	if !resp.Success {
+		return fmt.Errorf("refresh request failed: %s", resp.Message)
+	}
+
+	// The daemon acknowledges the trigger and performs the refresh afterwards.
+	fmt.Println("✓", resp.Message)
+	fmt.Println("  Watch progress with: tail -f /var/log/network-router.log")
+	return nil
+}
+
+// EnableAutoRefresh enables the scheduled route refresh
+func (c *Client) EnableAutoRefresh() error {
+	resp, err := c.SendRequest(daemon.ActionEnableAutoRefresh, nil)
+	if err != nil {
+		return err
+	}
+
+	if !resp.Success {
+		return fmt.Errorf("enable_auto_refresh request failed: %s", resp.Message)
+	}
+
+	fmt.Println("✓ Auto-refresh enabled")
+	return nil
+}
+
+// DisableAutoRefresh disables the scheduled route refresh
+func (c *Client) DisableAutoRefresh() error {
+	resp, err := c.SendRequest(daemon.ActionDisableAutoRefresh, nil)
+	if err != nil {
+		return err
+	}
+
+	if !resp.Success {
+		return fmt.Errorf("disable_auto_refresh request failed: %s", resp.Message)
+	}
+
+	fmt.Println("✓ Auto-refresh disabled")
 	return nil
 }
 

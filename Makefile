@@ -1,4 +1,5 @@
-.PHONY: all build clear-build daemon status tray install test-icons
+.PHONY: all build clear-build daemon status tray install test \
+        enable disable apply clear restart refresh uninstall reinstall deps
 
 # Binary name
 BINARY_NAME=network-router
@@ -42,10 +43,14 @@ clear:
 restart:
 	@./$(BUILD_DIR)/$(BINARY_NAME) restart
 
-# Test icons
-test-icons:
-	@echo "Testing SVG icon embedding..."
-	@go run test_icon_svg.go
+refresh:
+	@./$(BUILD_DIR)/$(BINARY_NAME) refresh
+
+# Tests
+test:
+	@echo "Running tests..."
+	go vet ./...
+	go test -race -count=1 ./...
 
 # Install service
 install: build
