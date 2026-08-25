@@ -196,10 +196,15 @@ func (s *IPCServer) processRequest(req IPCRequest) IPCResponse {
 		}
 
 	case ActionRefresh:
-		s.coordinator.RefreshRoutes()
+		if err := s.coordinator.ForceRefresh(); err != nil {
+			return IPCResponse{
+				Success: false,
+				Message: fmt.Sprintf("Failed to refresh routes: %v", err),
+			}
+		}
 		return IPCResponse{
 			Success: true,
-			Message: "Refresh triggered",
+			Message: "Routes filtering refreshed",
 		}
 
 	case ActionEnableDNSProxy:

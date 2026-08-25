@@ -156,7 +156,7 @@ The coordinator starts with `auto_routing_enabled = true`, `routes_applied = fal
 | `apply` | Forces route application immediately and starts DNS and refresh services. |
 | `clear` | Clears routes and, if auto-routing was enabled, disables auto-routing to prevent immediate re-application. |
 | `restart` | Performs `clear` followed by `apply`. |
-| `refresh` | Queues one refresh operation. Duplicate queued refreshes are dropped. |
+| `refresh` | Synchronously re-resolves domains and reapplies routes, returning success or failure details. |
 
 ## 7. Route application and cleanup
 
@@ -304,7 +304,7 @@ The daemon listens on `/tmp/network-router.sock` using newline-terminated JSON v
 | `apply` | Synchronously applies routes and returns failure details if setup fails. |
 | `clear` | Synchronously clears routes and reports whether auto-routing was disabled. |
 | `restart` | Synchronously clears and reapplies routes. |
-| `refresh` | Queues a refresh and immediately acknowledges the trigger. |
+| `refresh` | Synchronously re-resolves domains, reapplies routes, and returns the result. |
 | `enable_dns_proxy` / `disable_dns_proxy` | Starts or stops the DNS proxy. |
 | `enable_auto_refresh` / `disable_auto_refresh` | Changes scheduled refresh state. |
 | Any other action | Returns `success: false` and an unknown-action message. |
@@ -323,7 +323,7 @@ The executable dispatches these commands:
 | `enable`, `disable` | Toggles automatic routing. |
 | `apply`, `clear`, `restart` | Performs route operations. |
 | `enable-dns`, `disable-dns` | Toggles the DNS proxy. |
-| `refresh` | Queues a refresh; the daemon acknowledges the trigger and performs it afterwards. |
+| `refresh` | Synchronously re-resolves domains and reapplies routes. |
 | `enable-auto-refresh`, `disable-auto-refresh` | Toggles the scheduled refresh. |
 | `tray-enable`, `tray-disable` | Registers and starts, or stops and removes, the per-user LaunchAgent. |
 | `help`, `-h`, `--help` | Prints usage. |
@@ -346,7 +346,7 @@ The debug action opens Terminal through `osascript` and runs `tail -f /var/log/n
 
 Hiding the icon replaces it with a transparent pixel. The menu bar slot remains present and clickable, which is how the menu stays reachable to show the icon again.
 
-Menu actions post a native macOS notification through `osascript` and mirror the same text to the tray log. The title and message are passed as script run arguments rather than interpolated into the script source, so text originating from a daemon error cannot alter the script.
+Menu actions display a transient single-item notification popup from the tray icon (auto-dismissing after 3 seconds via an AppKit timer attached to tracking run loop modes) and mirror the same text to the tray log, completely avoiding macOS system notifications, external script engines, or Script Editor invocations.
 
 ## 13. Installation and service lifecycle
 

@@ -167,29 +167,9 @@ func (c *Coordinator) stopManagedServices() {
 }
 
 func (c *Coordinator) performRefresh() {
-	c.mu.RLock()
-	routesApplied := c.routesApplied
-	c.mu.RUnlock()
-
-	if !routesApplied {
-		log.Println("Routes are not currently applied, skipping refresh.")
-		return
+	if err := c.ForceRefresh(); err != nil {
+		log.Printf("Refresh error: %v", err)
 	}
-
-	log.Println("↻ Executing routing refresh sequence...")
-	c.stopManagedServices()
-	if err := c.applier.Clear(); err != nil {
-		log.Printf("Error clearing routes during refresh: %v", err)
-	}
-	c.setRoutesApplied(false)
-
-	if err := c.router.ApplyRoutes(); err != nil {
-		log.Printf("Error re-applying routes after refresh: %v", err)
-		return
-	}
-	c.setRoutesApplied(true)
-	c.startManagedServices()
-	log.Println("✓ Routing refresh completed successfully")
 }
 
 // Commands from IPC
@@ -216,6 +196,32 @@ func (c *Coordinator) ForceClear() error {
 		return err
 	}
 	c.setRoutesApplied(false)
+	return nil
+}
+
+func (c *Coordinator) ForceRefresh() error {
+	c.mu.RLock()
+	routesApplied := c.routesApplied
+	c.mu.RUnlock()
+
+	if !routesApplied {
+		return fmt.Errorf("routes are not currently applied, skipping refresh")
+	}
+
+	log.Println("↻ Executing routing refresh sequence...")
+	c.stopManagedServices()
+	if err := c.applier.Clear(); err != nil {
+		log.Printf("Error clearing routes during refresh: %v", err)
+	}
+	c.setRoutesApplied(false)
+
+	if err := c.router.ApplyRoutes(); err != nil {
+		log.Printf("Error re-applying routes after refresh: %v", err)
+		return err
+	}
+	c.setRoutesApplied(true)
+	c.startManagedServices()
+	log.Println("✓ Routing refresh completed successfully")
 	return nil
 }
 

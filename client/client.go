@@ -205,9 +205,7 @@ func (c *Client) Refresh() error {
 		return fmt.Errorf("refresh request failed: %s", resp.Message)
 	}
 
-	// The daemon acknowledges the trigger and performs the refresh afterwards.
 	fmt.Println("✓", resp.Message)
-	fmt.Println("  Watch progress with: tail -f /var/log/network-router.log")
 	return nil
 }
 

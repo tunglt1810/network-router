@@ -398,23 +398,11 @@ func (t *TrayApp) handleDebug() {
 	}
 }
 
-// showNotification posts a native macOS notification and mirrors it to the log.
-//
-// The title and message are passed to osascript as run arguments rather than
-// interpolated into the script source, so quotes and backslashes in a daemon
-// error message cannot break or alter the script.
+// showNotification displays a transient single-item popup from the tray icon
+// and mirrors the message to the log.
 func (t *TrayApp) showNotification(title, message string) {
 	log.Printf("[%s] %s", title, message)
-
-	cmd := exec.Command("osascript",
-		"-e", "on run argv",
-		"-e", "display notification (item 1 of argv) with title (item 2 of argv)",
-		"-e", "end run",
-		message, fmt.Sprintf("Network Router - %s", title),
-	)
-	if err := cmd.Run(); err != nil {
-		log.Printf("Could not post notification: %v", err)
-	}
+	ShowNotificationPopup(title, message, 3*time.Second)
 }
 
 // formatBool formats a boolean as ✓/✗

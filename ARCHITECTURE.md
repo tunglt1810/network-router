@@ -109,6 +109,7 @@
   - `apply`: Force apply routes
   - `clear`: Clear all routes
   - `restart`: Clear + Apply
+  - `refresh`: Re-resolve domains and re-apply routes synchronously
 
 ### 3. CLI Client
 - **File**: `client/client.go`
@@ -123,7 +124,8 @@
 - **Features**:
   - Visual status indicator (icon color)
   - Menu-driven controls
-  - Auto-refresh every 5s
+  - Auto-refresh status polling every 5s
+  - Transient single-item popup notifications (auto-dismissing after 3s, no system notification / Script Editor dependency)
   - No terminal required
 
 ### 5. Assets

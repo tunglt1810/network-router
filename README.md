@@ -191,7 +191,7 @@ network-router tray-disable
 *   **Hide Icon**: Makes the icon invisible. Its menu bar slot stays in place and remains clickable, which is how you get the menu back to show it again.
 *   **Quit**: Stops the tray app (can be restarted with `network-router tray`).
 
-Menu actions post a native macOS notification on success or failure, and mirror the same text to `/tmp/network-router-tray.log`.
+Menu actions display a transient single-item notification popup from the tray icon (auto-dismissing after 3 seconds) on success or failure, and mirror the same text to `/tmp/network-router-tray.log`.
 
 **Managing Tray App:**
 
