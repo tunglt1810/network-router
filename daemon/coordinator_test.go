@@ -217,3 +217,196 @@ func TestCoordinatorStatusReadsFromSnapshotStore(t *testing.T) {
 		t.Fatalf("status did not follow the snapshot store: %#v", status)
 	}
 }
+
+func notReadySnapshot() *core.NetworkSnapshot {
+	return &core.NetworkSnapshot{
+		WifiInterface: &utils.InterfaceInfo{Name: "Wi-Fi", DeviceName: "en0"},
+		WifiActive:    true,
+		PhoneReady:    false,
+		PhoneReason:   "phone interface has no gateway",
+	}
+}
+
+// Regression: apply after clear must re-enable auto-routing, so the next
+// detector tick does not tear the routes down again.
+func TestForceApplyAfterClearKeepsRoutes(t *testing.T) {
+	f := newCoordinatorFixture(t)
+	ready := readySnapshot("en7", "172.20.10.1")
+	f.snapshots.Store(ready)
+	_ = f.coordinator.ForceClear()
+
+	applied, err := f.coordinator.ForceApply()
+	if err != nil || !applied {
+		t.Fatalf("expected routes applied, applied=%v err=%v", applied, err)
+	}
+	status := f.coordinator.GetStatus()
+	if !status.AutoRoutingEnabled || !status.RoutesApplied {
+		t.Fatalf("expected auto-routing on and routes applied: %#v", status)
+	}
+	deletedBefore := f.manager.deletedCount()
+
+	f.coordinator.handleSnapshot(ready)
+	if !f.coordinator.GetStatus().RoutesApplied {
+		t.Fatal("routes were cleared by the next snapshot")
+	}
+	if got := f.manager.deletedCount(); got != deletedBefore {
+		t.Fatalf("routes deleted after snapshot: before=%d after=%d", deletedBefore, got)
+	}
+
+	if _, err := f.coordinator.ForceApply(); err != nil {
+		t.Fatalf("second apply failed: %v", err)
+	}
+	f.coordinator.handleSnapshot(ready)
+	if !f.coordinator.GetStatus().RoutesApplied {
+		t.Fatal("routes were cleared after a second apply")
+	}
+}
+
+func TestForceApplyWaitsWhenTetheringNotReady(t *testing.T) {
+	f := newCoordinatorFixture(t)
+	_ = f.coordinator.ForceClear()
+	f.snapshots.Store(notReadySnapshot())
+
+	applied, err := f.coordinator.ForceApply()
+	if err != nil || applied {
+		t.Fatalf("expected armed without error, applied=%v err=%v", applied, err)
+	}
+	status := f.coordinator.GetStatus()
+	if !status.AutoRoutingEnabled || status.RoutesApplied {
+		t.Fatalf("expected auto-routing on and no routes: %#v", status)
+	}
+	if starts, _ := f.dns.counts(); starts != 0 {
+		t.Fatalf("DNS proxy must not start while waiting, starts=%d", starts)
+	}
+	f.manager.mu.Lock()
+	added := len(f.manager.addedRoutes)
+	f.manager.mu.Unlock()
+	if added != 0 {
+		t.Fatalf("no routes must be added while waiting, added=%d", added)
+	}
+
+	f.coordinator.handleSnapshot(readySnapshot("en7", "172.20.10.1"))
+	if !f.coordinator.GetStatus().RoutesApplied {
+		t.Fatal("expected routes once tethering became ready")
+	}
+}
+
+func TestForceApplyWaitsWhenNoSnapshot(t *testing.T) {
+	f := newCoordinatorFixture(t)
+
+	applied, err := f.coordinator.ForceApply()
+	if err != nil || applied {
+		t.Fatalf("expected armed without error, applied=%v err=%v", applied, err)
+	}
+	if !f.coordinator.GetStatus().AutoRoutingEnabled {
+		t.Fatal("expected auto-routing on")
+	}
+}
+
+func TestForceApplyFailureKeepsAutoRoutingOn(t *testing.T) {
+	f := newCoordinatorFixture(t)
+	f.snapshots.Store(readySnapshot("en7", "172.20.10.1"))
+	f.manager.addErr = errors.New("route rejected")
+	_ = f.coordinator.ForceClear()
+
+	if _, err := f.coordinator.ForceApply(); err == nil {
+		t.Fatal("expected apply error")
+	}
+	status := f.coordinator.GetStatus()
+	if !status.AutoRoutingEnabled || status.RoutesApplied {
+		t.Fatalf("expected auto-routing on and no routes: %#v", status)
+	}
+	if starts, _ := f.dns.counts(); starts != 0 {
+		t.Fatalf("DNS proxy must not start after failure, starts=%d", starts)
+	}
+}
+
+func TestDisableStillClearsRoutesOnNextSnapshot(t *testing.T) {
+	f := newCoordinatorFixture(t)
+	ready := readySnapshot("en7", "172.20.10.1")
+	f.snapshots.Store(ready)
+	if applied, err := f.coordinator.ForceApply(); err != nil || !applied {
+		t.Fatalf("setup apply failed: applied=%v err=%v", applied, err)
+	}
+
+	f.coordinator.SetAutoRouting(false)
+	f.coordinator.handleSnapshot(ready)
+
+	if f.coordinator.GetStatus().RoutesApplied {
+		t.Fatal("expected disable to clear routes on next snapshot")
+	}
+	if f.manager.deletedCount() == 0 {
+		t.Fatal("expected route cleanup")
+	}
+}
+
+// IPC commands run on their own goroutines while handleSnapshot runs on the
+// coordinator loop. Interleaved apply/clear must not leave the reported state
+// out of sync with the routes that are actually installed.
+func TestCoordinatorSerializesConcurrentOperations(t *testing.T) {
+	f := newCoordinatorFixture(t)
+	ready := readySnapshot("en7", "172.20.10.1")
+	f.snapshots.Store(ready)
+
+	ops := []func(){
+		func() { _, _ = f.coordinator.ForceApply() },
+		func() { _ = f.coordinator.ForceClear() },
+		func() { f.coordinator.handleSnapshot(ready) },
+		func() { _ = f.coordinator.ForceRefresh() },
+	}
+	var wg sync.WaitGroup
+	for _, op := range ops {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for range 50 {
+				op()
+			}
+		}()
+	}
+	wg.Wait()
+
+	status := f.coordinator.GetStatus()
+	if status.RoutesApplied != (status.ActiveRoutes > 0) {
+		t.Fatalf("state drift: RoutesApplied=%v ActiveRoutes=%d", status.RoutesApplied, status.ActiveRoutes)
+	}
+}
+
+// The stored snapshot can be up to one tick old. When fresh discovery inside
+// ApplyRoutes finds the phone not ready, apply must still report "waiting".
+func TestForceApplyWaitsWhenFreshDiscoveryFindsPhoneNotReady(t *testing.T) {
+	f := newCoordinatorFixture(t)
+	f.snapshots.Store(readySnapshot("en7", "172.20.10.1"))
+	delete(f.provider.gateways, "en7")
+
+	applied, err := f.coordinator.ForceApply()
+	if err != nil || applied {
+		t.Fatalf("expected armed without error, applied=%v err=%v", applied, err)
+	}
+	if !f.coordinator.GetStatus().AutoRoutingEnabled {
+		t.Fatal("expected auto-routing on")
+	}
+}
+
+// A second apply must not hide a gateway change that the next snapshot
+// still has to rebind.
+func TestSecondApplyDoesNotHidePathChange(t *testing.T) {
+	f := newCoordinatorFixture(t)
+	f.snapshots.Store(readySnapshot("en7", "172.20.10.1"))
+	if applied, err := f.coordinator.ForceApply(); err != nil || !applied {
+		t.Fatalf("setup apply failed: applied=%v err=%v", applied, err)
+	}
+
+	f.provider.gateways["en7"] = "172.20.10.9"
+	moved := readySnapshot("en7", "172.20.10.9")
+	f.snapshots.Store(moved)
+	if _, err := f.coordinator.ForceApply(); err != nil {
+		t.Fatalf("second apply failed: %v", err)
+	}
+	deletedBefore := f.manager.deletedCount()
+
+	f.coordinator.handleSnapshot(moved)
+	if f.manager.deletedCount() == deletedBefore {
+		t.Fatal("expected routes to be rebound to the new gateway")
+	}
+}

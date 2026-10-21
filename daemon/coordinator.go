@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"sync"
@@ -31,6 +32,10 @@ type Coordinator struct {
 	dnsProxy  DNSController
 	snapshots *core.SnapshotStore
 	events    <-chan *core.NetworkSnapshot
+
+	// opMu serializes route operations (IPC commands and network events), so
+	// apply and clear never interleave. mu only guards the fields below.
+	opMu sync.Mutex
 
 	mu                      sync.RWMutex
 	autoRoutingEnabled      bool
@@ -93,6 +98,9 @@ func (c *Coordinator) handleSnapshot(snapshot *core.NetworkSnapshot) {
 		return
 	}
 
+	c.opMu.Lock()
+	defer c.opMu.Unlock()
+
 	c.mu.Lock()
 	autoRouting := c.autoRoutingEnabled
 	routesApplied := c.routesApplied
@@ -106,7 +114,7 @@ func (c *Coordinator) handleSnapshot(snapshot *core.NetworkSnapshot) {
 	if !autoRouting {
 		if routesApplied {
 			log.Println("Auto-routing disabled, clearing existing routes...")
-			_ = c.ForceClear()
+			_ = c.clearLocked()
 		}
 		return
 	}
@@ -174,16 +182,64 @@ func (c *Coordinator) performRefresh() {
 
 // Commands from IPC
 
-func (c *Coordinator) ForceApply() error {
+// ForceApply turns auto-routing on and applies routes when the tethered path
+// is usable. When it is not, it returns applied=false and handleSnapshot
+// applies the routes once the path becomes ready.
+func (c *Coordinator) ForceApply() (applied bool, err error) {
+	c.opMu.Lock()
+	defer c.opMu.Unlock()
+
+	c.mu.Lock()
+	wasEnabled := c.autoRoutingEnabled
+	wasApplied := c.routesApplied
+	c.autoRoutingEnabled = true
+	c.mu.Unlock()
+	if !wasEnabled {
+		log.Println("✓ Auto-routing enabled by Apply")
+	}
+
+	snapshot := c.snapshots.Load()
+	if snapshot == nil || !(snapshot.WifiActive && snapshot.PhoneReady) {
+		reason := ""
+		if snapshot != nil {
+			reason = snapshot.PhoneReason
+		}
+		log.Printf("Apply armed: waiting for tethering path (%s)", reason)
+		return false, nil
+	}
+
 	if err := c.router.ApplyRoutes(); err != nil {
-		return err
+		// The stored snapshot can be one tick old. Fresh discovery found no
+		// usable path, so wait for handleSnapshot like the check above.
+		if errors.Is(err, core.ErrPhoneNotReady) {
+			log.Printf("Apply armed: waiting for tethering path (%v)", err)
+			return false, nil
+		}
+		return false, err
+	}
+	// Record the path new routes were bound to, so the next snapshot does not
+	// see a "path change" and rebind them. When routes were already applied,
+	// keep the old path: existing routes are not moved, and handleSnapshot
+	// must still detect a real change.
+	if !wasApplied {
+		c.mu.Lock()
+		c.lastPhoneDevice = snapshot.PhoneDevice()
+		c.lastPhoneGateway = snapshot.PhoneGateway
+		c.mu.Unlock()
 	}
 	c.setRoutesApplied(true)
 	c.startManagedServices()
-	return nil
+	return true, nil
 }
 
 func (c *Coordinator) ForceClear() error {
+	c.opMu.Lock()
+	defer c.opMu.Unlock()
+	return c.clearLocked()
+}
+
+// clearLocked removes routes and turns auto-routing off. The caller must hold opMu.
+func (c *Coordinator) clearLocked() error {
 	c.mu.Lock()
 	if c.autoRoutingEnabled {
 		c.autoRoutingEnabled = false
@@ -200,6 +256,9 @@ func (c *Coordinator) ForceClear() error {
 }
 
 func (c *Coordinator) ForceRefresh() error {
+	c.opMu.Lock()
+	defer c.opMu.Unlock()
+
 	c.mu.RLock()
 	routesApplied := c.routesApplied
 	c.mu.RUnlock()

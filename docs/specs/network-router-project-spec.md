@@ -144,6 +144,12 @@ The selected device name is discovered at runtime. The implementation does not p
 
 The coordinator starts with `auto_routing_enabled = true`, `routes_applied = false`, and runtime DNS status disabled. The DNS and refresh configuration controls whether those services may start after a successful route apply.
 
+Route operations are serialized. Network events, `apply`, `clear`, and `refresh` hold one operation lock for their full duration, so an IPC command never interleaves with a network event and installed routes always match `routes_applied`. `status` does not take this lock and answers while an operation runs.
+
+`apply` is a request for routing, not a one-shot route install. It always leaves auto-routing enabled, so the `disable` rule above cannot remove routes that `apply` installed. An `apply` that fails while the path is ready also leaves auto-routing enabled, and the next network event retries.
+
+When `apply` installs routes while none were applied, the coordinator records the phone device and gateway it used, so the next network event does not report a false path change. When routes were already applied, the recorded path is kept, so a real gateway change is still detected and rebound.
+
 | Event or action | Coordinator behavior |
 | --- | --- |
 | Wi-Fi and phone become ready while routes are not applied | Rediscover, resolve targets, add pinned-resolver routes, CIDR routes, and host routes, persist state, mark routes applied, then start the configured DNS proxy and refresh cron. |
@@ -153,9 +159,9 @@ The coordinator starts with `auto_routing_enabled = true`, `routes_applied = fal
 | Auto-routing is disabled while routes are applied | Clear existing routes on the next network event. |
 | `enable` | Sets the auto-routing flag to true. It does not immediately apply routes. |
 | `disable` | Sets the auto-routing flag to false. Existing routes are cleared when the next network event is processed. |
-| `apply` | Forces route application immediately and starts DNS and refresh services. |
+| `apply` | Sets the auto-routing flag to true. When the published snapshot shows a ready Wi-Fi and phone path, applies routes immediately and starts DNS and refresh services. Otherwise, or when fresh discovery during apply reports the phone not ready, applies nothing, returns success with a waiting message, and lets the next ready snapshot apply the routes. |
 | `clear` | Clears routes and, if auto-routing was enabled, disables auto-routing to prevent immediate re-application. |
-| `restart` | Performs `clear` followed by `apply`. |
+| `restart` | Performs `clear` followed by `apply`. Because `apply` re-enables auto-routing, the routes survive the next network event. |
 | `refresh` | Synchronously re-resolves domains and reapplies routes, returning success or failure details. |
 
 ## 7. Route application and cleanup
@@ -301,15 +307,15 @@ The daemon listens on `/tmp/network-router.sock` using newline-terminated JSON v
 | --- | --- |
 | `status` | Returns the coordinator status object, including selected devices, gateways, phone readiness, a readiness reason, and the number of installed routes. |
 | `enable` / `disable` | Changes the auto-routing flag. |
-| `apply` | Synchronously applies routes and returns failure details if setup fails. |
+| `apply` | Enables auto-routing. Synchronously applies routes when the path is ready and returns failure details if setup fails. When the path is not ready, returns success with the message `Auto-routing is on. The daemon applies routes when tethering is ready.` |
 | `clear` | Synchronously clears routes and reports whether auto-routing was disabled. |
-| `restart` | Synchronously clears and reapplies routes. |
+| `restart` | Synchronously clears and reapplies routes. Returns the same waiting message as `apply` when the path is not ready. |
 | `refresh` | Synchronously re-resolves domains, reapplies routes, and returns the result. |
 | `enable_dns_proxy` / `disable_dns_proxy` | Starts or stops the DNS proxy. |
 | `enable_auto_refresh` / `disable_auto_refresh` | Changes scheduled refresh state. |
 | Any other action | Returns `success: false` and an unknown-action message. |
 
-The client uses a five-second default connection and operation timeout. `apply`, `refresh`, and `restart` use a 120-second timeout.
+The client uses a five-second default connection and operation timeout. `apply`, `clear`, `refresh`, and `restart` use a 120-second timeout, because route operations wait behind each other in the daemon and an apply can spend most of that time resolving domains.
 
 ## 11. CLI contract
 
@@ -342,11 +348,24 @@ The status tooltip reports Wi-Fi and phone activity, and appends the phone readi
 
 Available menu operations are status, auto-routing toggle, apply, refresh, clear, DNS-proxy toggle, auto-refresh toggle, debug log tail, hide/show icon, and quit. Menu actions call the corresponding IPC action and schedule a status update approximately 500 ms later.
 
+The apply action shows the daemon's response message, and shows it as an error when the response reports `success: false`. After an apply that is waiting for tethering, the icon stays gray until routes are applied.
+
 The debug action opens Terminal through `osascript` and runs `tail -f /var/log/network-router.log`.
 
 Hiding the icon replaces it with a transparent pixel. The menu bar slot remains present and clickable, which is how the menu stays reachable to show the icon again.
 
-Menu actions display a transient single-item notification popup from the tray icon (auto-dismissing after 3 seconds via an AppKit timer attached to tracking run loop modes) and mirror the same text to the tray log, completely avoiding macOS system notifications, external script engines, or Script Editor invocations.
+Menu actions display a transient notification popup from the tray icon and mirror the same text to the tray log as `[<title>] <message>`. The popup does not use macOS system notifications, `osascript`, or Script Editor.
+
+Popup behavior (`tray/popup_darwin.go`):
+
+- The popup is a temporary menu with one disabled item that reads `<title>: <message>`. It shows the result only and accepts no action.
+- It opens below the tray icon by temporarily replacing the status item's menu and clicking the status item button.
+- It closes after 3 seconds. The timer is attached to the common and event-tracking run loop modes, so it fires while the menu is open.
+- A click outside the popup closes it immediately.
+- When the popup closes, the full tray menu is restored.
+- A new popup closes a popup that is still open.
+
+On platforms other than macOS, `tray/popup_other.go` provides a no-op popup. Only the log line is written.
 
 ## 13. Installation and service lifecycle
 
@@ -403,7 +422,8 @@ The automated test suite covers network discovery, routing, DNS behavior, and co
 - `pkg/core/upstream_test.go`: upstream preference order, failover on `SERVFAIL`, `NXDOMAIN` as definitive, TCP retry after truncation, the explicit override, and the guarantee that a non-tethered answer is never reported routable.
 - `pkg/core/dnscache_test.go`: TTL clamping and aging, expiry, negative caching, query-type separation, LRU eviction, and refusal to cache failures or truncated replies.
 - `pkg/core/dns_proxy_test.go`: resolver-name deduplication, IP-literal rejection, idempotent start and stop, the guarantee that no resolver file is written when a listener fails to bind, selective reconciliation, the `force_ipv4` gate, cache reuse, and route submission.
-- `daemon/coordinator_test.go`: phone loss, gateway rebinding, service restart, failed apply state, and status derivation from the snapshot store.
+- `daemon/coordinator_test.go`: phone loss, gateway rebinding, service restart, failed apply state, status derivation from the snapshot store, apply after clear surviving the next network event, apply waiting when no snapshot exists or the phone is not ready, a second apply not hiding a gateway change, `disable` still clearing routes, and concurrent operations under the race detector.
+- `client/client_test.go`: per-action request timeouts.
 - `daemon/network_detector_test.go`: fail-closed snapshots and publication to the store when OS discovery fails.
 
 Minimum verification for changes to routing or DNS behavior:
@@ -439,4 +459,5 @@ Minimum verification for changes to routing or DNS behavior:
 - `pkg/utils/*.go`: macOS interface, gateway, DNS, and route command adapters.
 - `client/client.go`: IPC client and terminal output.
 - `tray/tray.go`: menu-bar UI and status polling.
+- `tray/popup_darwin.go`, `tray/popup_other.go`: transient notification popup and its non-macOS no-op.
 - `install_service.sh`, `uninstall_service.sh`, and `*.plist`: macOS service lifecycle.

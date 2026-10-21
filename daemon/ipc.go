@@ -26,6 +26,10 @@ const (
 	ActionDisableAutoRefresh = "disable_auto_refresh"
 )
 
+// msgApplyWaiting is returned when apply arms auto-routing but the tethered
+// path is not ready yet.
+const msgApplyWaiting = "Auto-routing is on. The daemon applies routes when tethering is ready."
+
 // IPCRequest represents a client request
 type IPCRequest struct {
 	Action string                 `json:"action"`
@@ -149,11 +153,15 @@ func (s *IPCServer) processRequest(req IPCRequest) IPCResponse {
 		}
 
 	case ActionApply:
-		if err := s.coordinator.ForceApply(); err != nil {
+		applied, err := s.coordinator.ForceApply()
+		if err != nil {
 			return IPCResponse{
 				Success: false,
 				Message: fmt.Sprintf("Failed to apply routes: %v", err),
 			}
+		}
+		if !applied {
+			return IPCResponse{Success: true, Message: msgApplyWaiting}
 		}
 		return IPCResponse{
 			Success: true,
@@ -184,11 +192,15 @@ func (s *IPCServer) processRequest(req IPCRequest) IPCResponse {
 				Message: fmt.Sprintf("Restart failed at clear: %v", err),
 			}
 		}
-		if err := s.coordinator.ForceApply(); err != nil {
+		applied, err := s.coordinator.ForceApply()
+		if err != nil {
 			return IPCResponse{
 				Success: false,
 				Message: fmt.Sprintf("Restart failed at apply: %v", err),
 			}
+		}
+		if !applied {
+			return IPCResponse{Success: true, Message: msgApplyWaiting}
 		}
 		return IPCResponse{
 			Success: true,

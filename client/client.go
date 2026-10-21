@@ -38,13 +38,19 @@ func NewClient() *Client {
 	}
 }
 
+// requestTimeout returns the timeout for an action. Route operations resolve
+// domains and wait behind each other in the daemon, so they get a long timeout.
+func (c *Client) requestTimeout(action string) time.Duration {
+	switch action {
+	case daemon.ActionApply, daemon.ActionClear, daemon.ActionRestart, daemon.ActionRefresh:
+		return 120 * time.Second
+	}
+	return c.timeout
+}
+
 // SendRequest sends a request to the daemon and returns the response
 func (c *Client) SendRequest(action string, params map[string]interface{}) (*IPCResponse, error) {
-	// Use longer timeout for restart command as it involves clearing + applying
-	timeout := c.timeout
-	if action == daemon.ActionRestart || action == daemon.ActionApply || action == daemon.ActionRefresh {
-		timeout = 120 * time.Second
-	}
+	timeout := c.requestTimeout(action)
 
 	conn, err := net.DialTimeout("unix", c.socketPath, timeout)
 	if err != nil {

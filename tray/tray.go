@@ -263,12 +263,14 @@ func (t *TrayApp) handleToggle() {
 
 // handleApply applies routes
 func (t *TrayApp) handleApply() {
-	_, err := t.client.SendRequest(daemon.ActionApply, nil)
+	resp, err := t.client.SendRequest(daemon.ActionApply, nil)
 	if err != nil {
 		log.Printf("Apply error: %v", err)
 		t.showNotification("Error", fmt.Sprintf("Failed to apply routes: %v", err))
+	} else if !resp.Success {
+		t.showNotification("Error", resp.Message)
 	} else {
-		t.showNotification("Success", "Routes applied")
+		t.showNotification("Success", resp.Message)
 		time.AfterFunc(500*time.Millisecond, t.updateStatus)
 	}
 }
