@@ -10,15 +10,18 @@ import (
 	"time"
 )
 
+// System runs the macOS commands that inspect interfaces and change routes.
+// It implements core.NetworkProvider and core.RouteManager.
+type System struct{}
+
 // InterfaceInfo holds information about a network interface
 type InterfaceInfo struct {
 	Name       string // e.g., "Wi-Fi"
 	DeviceName string // e.g., "en0"
-	MacAddress string
 }
 
 // GetNetworkInterfaces processes 'networksetup -listallhardwareports' to find interfaces
-func GetNetworkInterfaces() ([]InterfaceInfo, error) {
+func (System) GetNetworkInterfaces() ([]InterfaceInfo, error) {
 	cmd := exec.Command("networksetup", "-listallhardwareports")
 	output, err := cmd.Output()
 	if err != nil {
@@ -47,8 +50,6 @@ func ParseHardwarePorts(output string) []InterfaceInfo {
 			}
 		} else if strings.HasPrefix(line, "Device:") {
 			currentInterface.DeviceName = strings.TrimSpace(strings.TrimPrefix(line, "Device:"))
-		} else if strings.HasPrefix(line, "Ethernet Address:") {
-			currentInterface.MacAddress = strings.TrimSpace(strings.TrimPrefix(line, "Ethernet Address:"))
 		}
 	}
 	// Append the last one
@@ -103,7 +104,7 @@ func ParseIPv4Addresses(output string) []string {
 }
 
 // GetInterfaceIPv4Addresses returns the IPv4 addresses currently assigned to an interface.
-func GetInterfaceIPv4Addresses(deviceName string) ([]string, error) {
+func (System) GetInterfaceIPv4Addresses(deviceName string) ([]string, error) {
 	cmd := exec.Command("ifconfig", deviceName)
 	output, err := cmd.Output()
 	if err != nil {

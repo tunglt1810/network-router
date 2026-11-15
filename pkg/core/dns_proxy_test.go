@@ -87,10 +87,9 @@ func TestStartFailsWithoutWritingResolverFilesWhenThePortIsTaken(t *testing.T) {
 	port := occupied.LocalAddr().(*net.UDPAddr).Port
 
 	proxy := NewDNSProxy(&Config{
-		DNSProxyEnabled: true,
-		DNSProxyPort:    port,
-		TetherDomains:   []string{"example.com"},
+		TetherDomains: []string{"example.com"},
 	}, nil, nil)
+	proxy.port = port
 
 	if err := proxy.Start(); err == nil {
 		_ = proxy.Stop()
@@ -103,18 +102,6 @@ func TestStartFailsWithoutWritingResolverFilesWhenThePortIsTaken(t *testing.T) {
 	}
 	if len(entries) != 0 {
 		t.Fatalf("no resolver file may be written when the listener failed, found %d", len(entries))
-	}
-}
-
-func TestStartDoesNothingWhenDisabled(t *testing.T) {
-	redirectResolverDir(t)
-	proxy := NewDNSProxy(&Config{DNSProxyEnabled: false}, nil, nil)
-
-	if err := proxy.Start(); err != nil {
-		t.Fatalf("a disabled proxy must start cleanly: %v", err)
-	}
-	if proxy.running {
-		t.Fatal("a disabled proxy must not be running")
 	}
 }
 
@@ -158,7 +145,7 @@ func TestIsIPv6Preferring(t *testing.T) {
 // AAAA, HTTPS and SVCB let a client reach a host without using the A records the
 // applier installs routes for, so they are answered empty.
 func TestForceIPv4AnswersIPv6PreferringTypesEmpty(t *testing.T) {
-	proxy := NewDNSProxy(&Config{DNSProxyEnabled: true}, nil, nil)
+	proxy := NewDNSProxy(&Config{}, nil, nil)
 
 	for _, qtype := range []uint16{dns.TypeAAAA, dns.TypeHTTPS, dns.TypeSVCB} {
 		writer := &captureWriter{}
@@ -176,33 +163,11 @@ func TestForceIPv4AnswersIPv6PreferringTypesEmpty(t *testing.T) {
 	}
 }
 
-func TestForceIPv4CanBeDisabled(t *testing.T) {
-	disabled := false
-	harness := newHarness()
-	harness.responses["172.20.10.1:53"] = answerMsg(dns.RcodeSuccess, "203.0.113.1")
-
-	config := &Config{DNSProxyEnabled: true, ForceIPv4: &disabled}
-	snapshots := NewSnapshotStore()
-	snapshots.Store(&NetworkSnapshot{PhoneReady: true, PhoneGateway: "172.20.10.1", PhoneInterface: deviceInfo("en7")})
-
-	upstream := NewUpstreamResolver(config, snapshots)
-	upstream.exchange = harness.exchange
-	upstream.lookupDNS = func(string) []string { return []string{"172.20.10.1"} }
-
-	proxy := NewDNSProxy(config, upstream, nil)
-	writer := &captureWriter{}
-	proxy.handleDNSRequest(writer, queryFor("example.com", dns.TypeAAAA))
-
-	if len(harness.tried()) == 0 {
-		t.Fatal("with force_ipv4 disabled the query must reach an upstream")
-	}
-}
-
 func TestHandleRequestSubmitsResolvedHostsForRouting(t *testing.T) {
 	harness := newHarness()
 	harness.responses["172.20.10.1:53"] = answerMsg(dns.RcodeSuccess, "203.0.113.77")
 
-	config := &Config{DNSProxyEnabled: true}
+	config := &Config{}
 	snapshots := NewSnapshotStore()
 	snapshots.Store(&NetworkSnapshot{PhoneReady: true, PhoneGateway: "172.20.10.1", PhoneInterface: deviceInfo("en7")})
 
@@ -232,36 +197,11 @@ func TestHandleRequestSubmitsResolvedHostsForRouting(t *testing.T) {
 	}
 }
 
-// A second identical query must be served from cache without touching upstream,
-// which is also what keeps route work off the repeat path.
-func TestHandleRequestServesRepeatQueriesFromCache(t *testing.T) {
-	harness := newHarness()
-	harness.responses["172.20.10.1:53"] = answerMsg(dns.RcodeSuccess, "203.0.113.78")
-
-	config := &Config{DNSProxyEnabled: true}
-	snapshots := NewSnapshotStore()
-	snapshots.Store(&NetworkSnapshot{PhoneReady: true, PhoneGateway: "172.20.10.1", PhoneInterface: deviceInfo("en7")})
-
-	upstream := NewUpstreamResolver(config, snapshots)
-	upstream.exchange = harness.exchange
-	upstream.lookupDNS = func(string) []string { return []string{"172.20.10.1"} }
-
-	proxy := NewDNSProxy(config, upstream, nil)
-
-	proxy.handleDNSRequest(&captureWriter{}, queryFor("example.com", dns.TypeA))
-	first := len(harness.tried())
-	proxy.handleDNSRequest(&captureWriter{}, queryFor("example.com", dns.TypeA))
-
-	if len(harness.tried()) != first {
-		t.Fatalf("expected the second query to be served from cache, attempts went from %d to %d", first, len(harness.tried()))
-	}
-}
-
 func TestHandleRequestReportsFailureWhenNoUpstreamAnswers(t *testing.T) {
 	harness := newHarness()
 	harness.failures["172.20.10.1:53"] = errors.New("i/o timeout")
 
-	config := &Config{DNSProxyEnabled: true, DNSUpstream: "172.20.10.1:53"}
+	config := &Config{}
 	snapshots := NewSnapshotStore()
 	snapshots.Store(&NetworkSnapshot{PhoneReady: true, PhoneGateway: "172.20.10.1", PhoneInterface: deviceInfo("en7")})
 
@@ -279,7 +219,7 @@ func TestHandleRequestReportsFailureWhenNoUpstreamAnswers(t *testing.T) {
 }
 
 func TestHandleRequestRejectsEmptyQuestion(t *testing.T) {
-	proxy := NewDNSProxy(&Config{DNSProxyEnabled: true}, nil, nil)
+	proxy := NewDNSProxy(&Config{}, nil, nil)
 	writer := &captureWriter{}
 
 	proxy.handleDNSRequest(writer, new(dns.Msg))
@@ -299,11 +239,11 @@ func newLoopbackProxy(t *testing.T) *DNSProxy {
 	port := probe.LocalAddr().(*net.UDPAddr).Port
 	probe.Close()
 
-	return NewDNSProxy(&Config{
-		DNSProxyEnabled: true,
-		DNSProxyPort:    port,
-		TetherDomains:   []string{"example.com"},
+	proxy := NewDNSProxy(&Config{
+		TetherDomains: []string{"example.com"},
 	}, nil, nil)
+	proxy.port = port
+	return proxy
 }
 
 // captureWriter records the reply instead of sending it.
@@ -311,8 +251,12 @@ type captureWriter struct {
 	msg *dns.Msg
 }
 
-func (w *captureWriter) LocalAddr() net.Addr  { return &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 5454} }
-func (w *captureWriter) RemoteAddr() net.Addr { return &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 40000} }
+func (w *captureWriter) LocalAddr() net.Addr {
+	return &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 5454}
+}
+func (w *captureWriter) RemoteAddr() net.Addr {
+	return &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 40000}
+}
 func (w *captureWriter) WriteMsg(msg *dns.Msg) error {
 	w.msg = msg
 	return nil
@@ -322,3 +266,49 @@ func (w *captureWriter) Close() error                      { return nil }
 func (w *captureWriter) TsigStatus() error                 { return nil }
 func (w *captureWriter) TsigTimersOnly(bool)               {}
 func (w *captureWriter) Hijack()                           {}
+
+// mDNSResponder re-resolves a CNAME target through the default resolver when no
+// /etc/resolver file covers it, so the client would use an address the proxy
+// never routed. Seen with api.line.me -> e14293.a.akamaiedge.net.
+func TestFlattenCNAMEOwnsAddressesByTheQueriedName(t *testing.T) {
+	question := dns.Question{Name: "api.line.me.", Qtype: dns.TypeA, Qclass: dns.ClassINET}
+	reply := new(dns.Msg)
+	reply.Answer = []dns.RR{
+		mustRR(t, "api.line.me. 300 IN CNAME edge.example.net."),
+		mustRR(t, "edge.example.net. 20 IN A 203.0.113.10"),
+		mustRR(t, "edge.example.net. 20 IN A 203.0.113.11"),
+	}
+
+	flattenCNAME(reply, question)
+
+	if len(reply.Answer) != 2 {
+		t.Fatalf("expected two A records, got %v", reply.Answer)
+	}
+	for _, rr := range reply.Answer {
+		a, ok := rr.(*dns.A)
+		if !ok || a.Hdr.Name != "api.line.me." || a.Hdr.Ttl != 20 {
+			t.Fatalf("expected A owned by api.line.me. with TTL 20, got %v", rr)
+		}
+	}
+}
+
+func TestFlattenCNAMEKeepsAnswersWithoutCNAME(t *testing.T) {
+	question := dns.Question{Name: "example.com.", Qtype: dns.TypeA, Qclass: dns.ClassINET}
+	reply := new(dns.Msg)
+	reply.Answer = []dns.RR{mustRR(t, "example.com. 60 IN A 203.0.113.12")}
+
+	flattenCNAME(reply, question)
+
+	if len(reply.Answer) != 1 || reply.Answer[0].Header().Ttl != 60 {
+		t.Fatalf("answer without CNAME must stay unchanged, got %v", reply.Answer)
+	}
+}
+
+func mustRR(t *testing.T, text string) dns.RR {
+	t.Helper()
+	rr, err := dns.NewRR(text)
+	if err != nil {
+		t.Fatalf("parse %q: %v", text, err)
+	}
+	return rr
+}

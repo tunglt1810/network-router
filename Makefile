@@ -1,5 +1,5 @@
 .PHONY: all build clear-build daemon status tray install test \
-        enable disable apply clear restart refresh uninstall reinstall deps
+        on off refresh uninstall reinstall deps
 
 # Binary name
 BINARY_NAME=network-router
@@ -28,20 +28,11 @@ tray: build
 status:
 	@./$(BUILD_DIR)/$(BINARY_NAME) status
 
-enable:
-	@./$(BUILD_DIR)/$(BINARY_NAME) enable
+on:
+	@./$(BUILD_DIR)/$(BINARY_NAME) on
 
-disable:
-	@./$(BUILD_DIR)/$(BINARY_NAME) disable
-
-apply:
-	@./$(BUILD_DIR)/$(BINARY_NAME) apply
-
-clear:
-	@./$(BUILD_DIR)/$(BINARY_NAME) clear
-
-restart:
-	@./$(BUILD_DIR)/$(BINARY_NAME) restart
+off:
+	@./$(BUILD_DIR)/$(BINARY_NAME) off
 
 refresh:
 	@./$(BUILD_DIR)/$(BINARY_NAME) refresh
@@ -62,15 +53,6 @@ uninstall:
 	sudo ./uninstall_service.sh
 
 reinstall: uninstall install
-
-# Legacy commands (for backward compatibility)
-start-routing: build
-	@echo "Running..."
-	sudo ./$(BUILD_DIR)/$(BINARY_NAME) daemon -config ./config.yaml
-
-clear-routing: clear
-	@echo "Running..."
-	sudo ./$(BUILD_DIR)/$(BINARY_NAME) clear
 
 deps:
 	@echo "Tidying dependencies..."

@@ -17,26 +17,14 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// RouteKind records why a route exists, so cleanup can report meaningfully and
-// so infrastructure routes are never mistaken for user-configured ones.
-type RouteKind string
-
-const (
-	// RouteStatic covers configured CIDRs and domains resolved at apply time.
-	RouteStatic RouteKind = "static"
-	// RouteDynamic covers hosts learned from DNS answers at runtime.
-	RouteDynamic RouteKind = "dynamic"
-	// RouteInfra covers the upstream resolvers the proxy must reach over the
-	// tethered path.
-	RouteInfra RouteKind = "infrastructure"
-)
-
 // ErrPhoneNotReady reports that no usable tethered path is currently available.
 var ErrPhoneNotReady = errors.New("phone interface is not ready")
 
 const persistDebounce = 2 * time.Second
 
-// routeState is the on-disk record of routes this process installed.
+// routeState is the on-disk record of routes this process installed. Only the
+// keys are used. It stays a map because state files from earlier versions
+// stored a route kind as the value, and reconciliation must still read them.
 type routeState struct {
 	Routes map[string]string `yaml:"routes"`
 }
@@ -54,7 +42,7 @@ type RouteApplier struct {
 	statePath string
 
 	mu      sync.Mutex
-	applied map[string]RouteKind
+	applied map[string]struct{}
 
 	queue     chan []string
 	done      chan struct{}
@@ -65,20 +53,11 @@ type RouteApplier struct {
 }
 
 func NewRouteApplier(manager RouteManager, snapshots *SnapshotStore, statePath string) *RouteApplier {
-	if manager == nil {
-		manager = NewOSRouteManager()
-	}
-	if snapshots == nil {
-		snapshots = NewSnapshotStore()
-	}
-	if statePath == "" {
-		statePath = DefaultStatePath
-	}
 	return &RouteApplier{
 		manager:   manager,
 		snapshots: snapshots,
 		statePath: statePath,
-		applied:   make(map[string]RouteKind),
+		applied:   make(map[string]struct{}),
 		queue:     make(chan []string, 256),
 		done:      make(chan struct{}),
 	}
@@ -101,7 +80,7 @@ func (a *RouteApplier) run() {
 		case <-a.done:
 			return
 		case destinations := <-a.queue:
-			a.addBatch(RouteDynamic, destinations)
+			a.addBatch(destinations)
 		}
 	}
 }
@@ -139,40 +118,33 @@ func (a *RouteApplier) Submit(destinations []string) {
 	}
 }
 
-// Add installs a single route synchronously.
-func (a *RouteApplier) Add(kind RouteKind, destination string) error {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	return a.addLocked(kind, destination)
-}
-
 // AddMany installs routes synchronously and returns every failure encountered.
 // Callers decide whether a partial result is acceptable.
-func (a *RouteApplier) AddMany(kind RouteKind, destinations []string) []error {
+func (a *RouteApplier) AddMany(destinations []string) []error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
 	var failures []error
 	for _, destination := range destinations {
-		if err := a.addLocked(kind, destination); err != nil {
+		if err := a.addLocked(destination); err != nil {
 			failures = append(failures, err)
 		}
 	}
 	return failures
 }
 
-func (a *RouteApplier) addBatch(kind RouteKind, destinations []string) {
+func (a *RouteApplier) addBatch(destinations []string) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
 	for _, destination := range destinations {
-		if err := a.addLocked(kind, destination); err != nil {
+		if err := a.addLocked(destination); err != nil {
 			log.Printf("❌ Dynamic route for %s failed: %v", destination, err)
 		}
 	}
 }
 
-func (a *RouteApplier) addLocked(kind RouteKind, destination string) error {
+func (a *RouteApplier) addLocked(destination string) error {
 	normalized, err := normalizeDestination(destination)
 	if err != nil {
 		return err
@@ -195,7 +167,7 @@ func (a *RouteApplier) addLocked(kind RouteKind, destination string) error {
 		return err
 	}
 
-	a.applied[normalized] = kind
+	a.applied[normalized] = struct{}{}
 	a.schedulePersist()
 	return nil
 }
@@ -327,8 +299,8 @@ func (a *RouteApplier) flushState() {
 func (a *RouteApplier) writeState() error {
 	a.mu.Lock()
 	state := routeState{Routes: make(map[string]string, len(a.applied))}
-	for destination, kind := range a.applied {
-		state.Routes[destination] = string(kind)
+	for destination := range a.applied {
+		state.Routes[destination] = ""
 	}
 	a.mu.Unlock()
 

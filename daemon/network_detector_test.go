@@ -33,7 +33,7 @@ func TestNetworkDetectorEmitsNotReadySnapshotWhenDiscoveryFails(t *testing.T) {
 	detector.check()
 
 	snapshot := <-detector.Observe()
-	if snapshot.WifiActive || snapshot.PhoneReady {
+	if snapshot.PhoneReady {
 		t.Fatalf("expected fail-closed snapshot: %#v", snapshot)
 	}
 	if snapshot.PhoneReason == "" {

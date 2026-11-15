@@ -21,41 +21,15 @@ const (
 
 // Router turns configuration into a set of routes over the tethered path.
 //
-// It holds no mutable network state of its own: discovery results live in the
-// shared SnapshotStore and installed routes live in the RouteApplier. Keeping
-// this type stateless is what allows the coordinator and the DNS handler
-// goroutines to work concurrently without contending over router fields.
+// It holds no mutable network state of its own: the coordinator passes the
+// snapshot to apply against, and installed routes live in the RouteApplier.
 type Router struct {
-	config    *Config
-	provider  NetworkProvider
-	snapshots *SnapshotStore
-	applier   *RouteApplier
+	config  *Config
+	applier *RouteApplier
 }
 
-func NewRouter(config *Config, provider NetworkProvider, snapshots *SnapshotStore, applier *RouteApplier) *Router {
-	if provider == nil {
-		provider = NewOSNetworkProvider()
-	}
-	if snapshots == nil {
-		snapshots = NewSnapshotStore()
-	}
-	return &Router{
-		config:    config,
-		provider:  provider,
-		snapshots: snapshots,
-		applier:   applier,
-	}
-}
-
-// Refresh rediscovers the network and publishes the result. Applying routes
-// always refreshes first so a changed device number is never used from cache.
-func (r *Router) Refresh() (*NetworkSnapshot, error) {
-	snapshot, err := DiscoverNetwork(r.config, r.provider)
-	if err != nil {
-		return nil, err
-	}
-	r.snapshots.Store(snapshot)
-	return snapshot, nil
+func NewRouter(config *Config, applier *RouteApplier) *Router {
+	return &Router{config: config, applier: applier}
 }
 
 // ResolveDomains resolves the configured domains that are not wildcards.
@@ -137,13 +111,9 @@ func resolveWithRetry(ctx context.Context, domain string) ([]string, error) {
 //
 // The system default route is never touched. Only host and network routes for
 // the configured destinations are installed.
-func (r *Router) ApplyRoutes() error {
-	snapshot, err := r.Refresh()
-	if err != nil {
-		return err
-	}
-	if snapshot.WifiInterface == nil {
-		return fmt.Errorf("could not find Wi-Fi interface")
+func (r *Router) ApplyRoutes(snapshot *NetworkSnapshot) error {
+	if snapshot == nil {
+		return fmt.Errorf("%w: network has not been discovered yet", ErrPhoneNotReady)
 	}
 	if !snapshot.PhoneReady {
 		return fmt.Errorf("%w: %s", ErrPhoneNotReady, snapshot.PhoneReason)
@@ -165,9 +135,9 @@ func (r *Router) ApplyRoutes() error {
 	log.Printf("📋 Applying %d CIDR(s), %d resolved host(s), %d resolver host(s)",
 		len(destinations), len(resolved), len(infraHosts))
 
-	failures := r.applier.AddMany(RouteInfra, infraHosts)
-	failures = append(failures, r.applier.AddMany(RouteStatic, destinations)...)
-	failures = append(failures, r.applier.AddMany(RouteStatic, resolved)...)
+	failures := r.applier.AddMany(infraHosts)
+	failures = append(failures, r.applier.AddMany(destinations)...)
+	failures = append(failures, r.applier.AddMany(resolved)...)
 
 	// A single rejected destination is not a reason to tear everything down.
 	// Rolling the whole batch back would let one problematic entry deny every
@@ -184,15 +154,5 @@ func (r *Router) ApplyRoutes() error {
 	}
 
 	log.Printf("✓ %d route(s) active via %s", r.applier.Count(), snapshot.PhoneGateway)
-	return nil
-}
-
-// ClearRoutes removes every route this process installed.
-func (r *Router) ClearRoutes() error {
-	log.Println("Cleaning up routing configuration...")
-	if err := r.applier.Clear(); err != nil {
-		return err
-	}
-	log.Println("✓ Cleanup completed")
 	return nil
 }

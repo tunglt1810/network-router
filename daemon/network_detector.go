@@ -23,12 +23,6 @@ type NetworkDetector struct {
 }
 
 func NewNetworkDetector(config *core.Config, provider core.NetworkProvider, snapshots *core.SnapshotStore) *NetworkDetector {
-	if provider == nil {
-		provider = core.NewOSNetworkProvider()
-	}
-	if snapshots == nil {
-		snapshots = core.NewSnapshotStore()
-	}
 	return &NetworkDetector{
 		config:        config,
 		provider:      provider,

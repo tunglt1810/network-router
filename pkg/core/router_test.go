@@ -81,11 +81,29 @@ func phoneProvider() *fakeNetworkProvider {
 	}
 }
 
-func newTestRouter(t *testing.T, config *Config, provider NetworkProvider, manager RouteManager) (*Router, *RouteApplier) {
+// testRouter discovers the network through a fake provider and publishes the
+// snapshot before each apply, as the detector and coordinator do.
+type testRouter struct {
+	*Router
+	config    *Config
+	provider  NetworkProvider
+	snapshots *SnapshotStore
+}
+
+func (r *testRouter) ApplyRoutes() error {
+	snapshot, err := DiscoverNetwork(r.config, r.provider)
+	if err != nil {
+		return err
+	}
+	r.snapshots.Store(snapshot)
+	return r.Router.ApplyRoutes(snapshot)
+}
+
+func newTestRouter(t *testing.T, config *Config, provider NetworkProvider, manager RouteManager) (*testRouter, *RouteApplier) {
 	t.Helper()
 	snapshots := NewSnapshotStore()
 	applier := NewRouteApplier(manager, snapshots, filepath.Join(t.TempDir(), "state.yaml"))
-	return NewRouter(config, provider, snapshots, applier), applier
+	return &testRouter{Router: NewRouter(config, applier), config: config, provider: provider, snapshots: snapshots}, applier
 }
 
 func TestApplyRoutesUsesCurrentPhoneGatewayAfterDeviceRemap(t *testing.T) {
@@ -191,29 +209,6 @@ func TestApplyRoutesToleratesRoutesThatAlreadyExist(t *testing.T) {
 	}
 	if applier.Count() == 0 {
 		t.Fatal("expected the pre-existing route to be tracked for cleanup")
-	}
-}
-
-func TestClearRoutesRemovesEverythingInstalled(t *testing.T) {
-	manager := NewMockRouteManager()
-	router, applier := newTestRouter(t, &Config{
-		TetherCIDRs:       []string{"192.0.2.0/24"},
-		DNSUpstreamPinned: []string{"1.1.1.1:53"},
-	}, phoneProvider(), manager)
-
-	if err := router.ApplyRoutes(); err != nil {
-		t.Fatalf("apply routes: %v", err)
-	}
-	installed := len(manager.routes())
-
-	if err := router.ClearRoutes(); err != nil {
-		t.Fatalf("clear routes: %v", err)
-	}
-	if len(manager.deleted()) != installed {
-		t.Fatalf("expected %d deletions, got %v", installed, manager.deleted())
-	}
-	if applier.Count() != 0 {
-		t.Fatalf("expected no tracked routes after clear, got %d", applier.Count())
 	}
 }
 

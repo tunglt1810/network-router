@@ -3,11 +3,12 @@ module network-router
 go 1.24.0
 
 require (
+	// tray/popup_darwin.go reads the private statusItem and menu ivars of this
+	// version. Check the popup by hand before an upgrade.
 	github.com/getlantern/systray v1.2.2
+	github.com/miekg/dns v1.1.72
 	golang.org/x/sync v0.19.0
 	gopkg.in/yaml.v3 v3.0.1
-	github.com/miekg/dns v1.1.72
-	github.com/robfig/cron/v3 v3.0.1
 )
 
 require (

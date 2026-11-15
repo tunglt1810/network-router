@@ -12,7 +12,7 @@ import (
 // A gateway that cannot be used for routing (unparseable, unspecified such as
 // 0.0.0.0, loopback, or multicast) is rejected rather than returned, because
 // installing routes through it would silently blackhole traffic.
-func GetInterfaceGateway(deviceName string) (string, error) {
+func (System) GetInterfaceGateway(deviceName string) (string, error) {
 	output, err := exec.Command("ipconfig", "getoption", deviceName, "router").Output()
 	if err != nil {
 		return "", err

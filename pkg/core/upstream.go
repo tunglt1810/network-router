@@ -71,14 +71,6 @@ func NewUpstreamResolver(config *Config, snapshots *SnapshotStore) *UpstreamReso
 func (r *UpstreamResolver) Resolve(request *dns.Msg) (*dns.Msg, bool, error) {
 	deadline := time.Now().Add(upstreamBudget)
 
-	if override := strings.TrimSpace(r.config.DNSUpstream); override != "" {
-		reply, err := r.try(request, withDefaultPort(override), deadline, 1)
-		if err != nil {
-			return nil, false, err
-		}
-		return reply, true, nil
-	}
-
 	reply, lastErr := r.race(request, r.tetheredUpstreams(), deadline)
 	if lastErr == nil {
 		return reply, true, nil
@@ -87,7 +79,7 @@ func (r *UpstreamResolver) Resolve(request *dns.Msg) (*dns.Msg, bool, error) {
 	// Degraded path. Returning a usable answer beats SERVFAIL, because the
 	// resolver file leaves the client with nowhere else to ask.
 	for _, address := range systemUpstreams() {
-		reply, err := r.try(request, address, deadline, 1)
+		reply, err := r.try(request, address, deadline)
 		if err == nil {
 			log.Printf("⚠️ Answered %s from the system resolver; routes were not installed for it", questionName(request))
 			return reply, false, nil
@@ -179,7 +171,7 @@ func (r *UpstreamResolver) race(request *dns.Msg, upstreams []string, deadline t
 				case <-time.After(time.Duration(index) * upstreamStagger):
 				}
 			}
-			reply, err := r.try(request, address, deadline, 1)
+			reply, err := r.try(request, address, deadline)
 			results <- attemptResult{reply: reply, err: err}
 		}(index, address)
 	}
@@ -206,46 +198,34 @@ func (r *UpstreamResolver) race(request *dns.Msg, upstreams []string, deadline t
 	return nil, lastErr
 }
 
-// try performs up to attempts exchanges against one upstream, and retries over
-// TCP when the answer is truncated.
-func (r *UpstreamResolver) try(request *dns.Msg, address string, deadline time.Time, attempts int) (*dns.Msg, error) {
-	var lastErr error
-
-	for attempt := 0; attempt < attempts; attempt++ {
-		timeout := timeUntil(deadline)
-		if timeout <= 0 {
-			break
-		}
-		if timeout > upstreamPerTry {
-			timeout = upstreamPerTry
-		}
-
-		reply, err := r.exchange(request, address, "udp", timeout)
-		if err != nil {
-			lastErr = fmt.Errorf("upstream %s: %w", address, err)
-			continue
-		}
-
-		// macOS retries over TCP when a reply is truncated, so do the same here
-		// rather than handing back a partial answer.
-
-		if reply.Truncated {
-			if tcpReply, tcpErr := r.exchange(request, address, "tcp", timeUntil(deadline)); tcpErr == nil {
-				reply = tcpReply
-			}
-		}
-
-		if !isDefinitive(reply.Rcode) {
-			lastErr = fmt.Errorf("upstream %s returned %s", address, dns.RcodeToString[reply.Rcode])
-			continue
-		}
-		return reply, nil
+// try performs one exchange against one upstream, and retries over TCP when the
+// answer is truncated.
+func (r *UpstreamResolver) try(request *dns.Msg, address string, deadline time.Time) (*dns.Msg, error) {
+	timeout := time.Until(deadline)
+	if timeout <= 0 {
+		return nil, ErrNoUpstream
+	}
+	if timeout > upstreamPerTry {
+		timeout = upstreamPerTry
 	}
 
-	if lastErr == nil {
-		lastErr = ErrNoUpstream
+	reply, err := r.exchange(request, address, "udp", timeout)
+	if err != nil {
+		return nil, fmt.Errorf("upstream %s: %w", address, err)
 	}
-	return nil, lastErr
+
+	// macOS retries over TCP when a reply is truncated, so do the same here
+	// rather than handing back a partial answer.
+	if reply.Truncated {
+		if tcpReply, tcpErr := r.exchange(request, address, "tcp", time.Until(deadline)); tcpErr == nil {
+			reply = tcpReply
+		}
+	}
+
+	if !isDefinitive(reply.Rcode) {
+		return nil, fmt.Errorf("upstream %s returned %s", address, dns.RcodeToString[reply.Rcode])
+	}
+	return reply, nil
 }
 
 // isDefinitive distinguishes a real answer from an upstream failure. A
@@ -310,10 +290,6 @@ func dedupeStrings(values []string) []string {
 		result = append(result, value)
 	}
 	return result
-}
-
-func timeUntil(deadline time.Time) time.Duration {
-	return time.Until(deadline)
 }
 
 func questionName(msg *dns.Msg) string {

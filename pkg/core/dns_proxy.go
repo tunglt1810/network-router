@@ -3,12 +3,14 @@ package core
 import (
 	"fmt"
 	"log"
+	"math"
 	"net"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/miekg/dns"
@@ -31,13 +33,14 @@ var resolverDir = "/etc/resolver"
 // narrower than that scope: with `apple.com` configured, `www.apple.com` reaches
 // this proxy and must be treated as in scope.
 type DNSProxy struct {
-	config    *Config
-	upstream  *UpstreamResolver
-	cache     *DNSCache
-	applier   *RouteApplier
+	config   *Config
+	upstream *UpstreamResolver
+	applier  *RouteApplier
+	port     int
 
-	mu        sync.Mutex
-	running   bool
+	mu sync.Mutex
+	// running is atomic so Running answers while Start or Stop holds mu.
+	running   atomic.Bool
 	servers   []*dns.Server
 	resolvers []string
 }
@@ -47,8 +50,8 @@ func NewDNSProxy(config *Config, upstream *UpstreamResolver, applier *RouteAppli
 	return &DNSProxy{
 		config:   config,
 		upstream: upstream,
-		cache:    NewDNSCache(cacheDefaultMax),
 		applier:  applier,
+		port:     ProxyPort,
 	}
 }
 
@@ -62,11 +65,11 @@ func (p *DNSProxy) Start() error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
-	if !p.config.DNSProxyEnabled || p.running {
+	if p.running.Load() {
 		return nil
 	}
 
-	port := p.config.ProxyPort()
+	port := p.port
 	address := fmt.Sprintf("127.0.0.1:%d", port)
 
 	mux := dns.NewServeMux()
@@ -127,7 +130,7 @@ func (p *DNSProxy) Start() error {
 	}
 
 	p.servers = servers
-	p.running = true
+	p.running.Store(true)
 	return nil
 }
 
@@ -137,7 +140,7 @@ func (p *DNSProxy) Stop() error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
-	if !p.running {
+	if !p.running.Load() {
 		return nil
 	}
 
@@ -152,9 +155,13 @@ func (p *DNSProxy) Stop() error {
 	}
 
 	p.servers = nil
-	p.running = false
-	p.cache.Purge()
+	p.running.Store(false)
 	return firstErr
+}
+
+// Running reports whether the listeners are serving and resolver files exist.
+func (p *DNSProxy) Running() bool {
+	return p.running.Load()
 }
 
 // activate starts serving and blocks until the listener is live or fails.
@@ -319,18 +326,13 @@ func (p *DNSProxy) handleDNSRequest(w dns.ResponseWriter, r *dns.Msg) {
 	question := r.Question[0]
 	domain := strings.TrimSuffix(strings.ToLower(question.Name), ".")
 
-	if p.config.ForceIPv4Enabled() && isIPv6Preferring(question.Qtype) {
+	if isIPv6Preferring(question.Qtype) {
 		// Empty NOERROR steers the client to the A record, which is the address
 		// family the tethered route actually covers.
 		reply := new(dns.Msg)
 		reply.SetReply(r)
 		reply.Authoritative = false
 		_ = w.WriteMsg(reply)
-		return
-	}
-
-	if cached, ok := p.cache.Get(r); ok {
-		_ = w.WriteMsg(cached)
 		return
 	}
 
@@ -341,12 +343,48 @@ func (p *DNSProxy) handleDNSRequest(w dns.ResponseWriter, r *dns.Msg) {
 		return
 	}
 
+	flattenCNAME(reply, question)
+
 	if routable && p.applier != nil {
 		p.applier.Submit(answerIPv4(reply))
 	}
 
-	p.cache.Put(r, reply)
 	_ = w.WriteMsg(reply)
+}
+
+// flattenCNAME rewrites an A answer that holds a CNAME chain into A records
+// owned by the queried name. mDNSResponder re-resolves a CNAME target that no
+// /etc/resolver file covers through the default resolver, so without this the
+// client connects to an address from the other network that has no route.
+func flattenCNAME(reply *dns.Msg, question dns.Question) {
+	if question.Qtype != dns.TypeA {
+		return
+	}
+
+	hasCNAME := false
+	ttl := uint32(math.MaxUint32)
+	var addresses []*dns.A
+	for _, rr := range reply.Answer {
+		ttl = min(ttl, rr.Header().Ttl)
+		switch record := rr.(type) {
+		case *dns.CNAME:
+			hasCNAME = true
+		case *dns.A:
+			addresses = append(addresses, record)
+		}
+	}
+	if !hasCNAME || len(addresses) == 0 {
+		return
+	}
+
+	flat := make([]dns.RR, 0, len(addresses))
+	for _, address := range addresses {
+		record := dns.Copy(address).(*dns.A)
+		record.Hdr.Name = question.Name
+		record.Hdr.Ttl = ttl
+		flat = append(flat, record)
+	}
+	reply.Answer = flat
 }
 
 func answerIPv4(msg *dns.Msg) []string {

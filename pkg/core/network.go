@@ -16,25 +16,6 @@ type NetworkProvider interface {
 	GetInterfaceGateway(deviceName string) (string, error)
 }
 
-// OSNetworkProvider is the production NetworkProvider implementation.
-type OSNetworkProvider struct{}
-
-func NewOSNetworkProvider() *OSNetworkProvider {
-	return &OSNetworkProvider{}
-}
-
-func (p *OSNetworkProvider) GetNetworkInterfaces() ([]utils.InterfaceInfo, error) {
-	return utils.GetNetworkInterfaces()
-}
-
-func (p *OSNetworkProvider) GetInterfaceIPv4Addresses(deviceName string) ([]string, error) {
-	return utils.GetInterfaceIPv4Addresses(deviceName)
-}
-
-func (p *OSNetworkProvider) GetInterfaceGateway(deviceName string) (string, error) {
-	return utils.GetInterfaceGateway(deviceName)
-}
-
 // NetworkSnapshot contains the current routing-path discovery result.
 //
 // It is immutable once published. Readers on the DNS request path must take the
@@ -42,21 +23,10 @@ func (p *OSNetworkProvider) GetInterfaceGateway(deviceName string) (string, erro
 // shells out to networksetup, ifconfig, and ipconfig, which is far too slow to
 // sit inside the resolver's timeout budget.
 type NetworkSnapshot struct {
-	WifiInterface  *utils.InterfaceInfo
 	PhoneInterface *utils.InterfaceInfo
-	WifiActive     bool
-	WifiGateway    string
 	PhoneGateway   string
 	PhoneReady     bool
 	PhoneReason    string
-}
-
-// WifiDevice returns the Wi-Fi device name, or an empty string.
-func (s *NetworkSnapshot) WifiDevice() string {
-	if s == nil || s.WifiInterface == nil {
-		return ""
-	}
-	return s.WifiInterface.DeviceName
 }
 
 // PhoneDevice returns the phone device name, or an empty string.
@@ -85,30 +55,22 @@ func (s *SnapshotStore) Load() *NetworkSnapshot {
 	return s.value.Load()
 }
 
-// DiscoverNetwork resolves the current Wi-Fi and phone service candidates.
-// It never chooses an arbitrary non-Wi-Fi interface: only configured phone
-// keywords and known tethering service names are considered.
+// DiscoverNetwork resolves the current phone service candidate. It never
+// chooses an arbitrary interface: only configured phone keywords and known
+// tethering service names are considered.
 func DiscoverNetwork(config *Config, provider NetworkProvider) (*NetworkSnapshot, error) {
-	if provider == nil {
-		provider = NewOSNetworkProvider()
-	}
 
 	interfaces, err := provider.GetNetworkInterfaces()
 	if err != nil {
 		return nil, fmt.Errorf("get network interfaces: %w", err)
 	}
 
-	wifiKeyword := config.WifiInterfaceKeyword
-	if wifiKeyword == "" {
-		wifiKeyword = "Wi-Fi"
-	}
 	phoneKeyword := config.PhoneInterfaceKeyword
 	if phoneKeyword == "" {
 		phoneKeyword = "iPhone USB"
 	}
 
 	snapshot := &NetworkSnapshot{}
-	wifiCandidates := utils.FindInterfacesByName(interfaces, []string{wifiKeyword, "Wi-Fi"})
 	phoneCandidates := utils.FindInterfacesByName(interfaces, []string{
 		phoneKeyword,
 		"iPhone USB",
@@ -116,34 +78,9 @@ func DiscoverNetwork(config *Config, provider NetworkProvider) (*NetworkSnapshot
 		"RNDIS",
 	})
 
-	snapshot.WifiInterface, snapshot.WifiActive, snapshot.WifiGateway = selectActiveInterface(wifiCandidates, provider)
 	snapshot.PhoneInterface, snapshot.PhoneReady, snapshot.PhoneGateway, snapshot.PhoneReason = selectPhoneInterface(phoneCandidates, provider)
 
 	return snapshot, nil
-}
-
-func selectActiveInterface(candidates []utils.InterfaceInfo, provider NetworkProvider) (*utils.InterfaceInfo, bool, string) {
-	if len(candidates) == 0 {
-		return nil, false, ""
-	}
-
-	var first *utils.InterfaceInfo
-	for i := range candidates {
-		candidate := candidates[i]
-		if first == nil {
-			first = &candidate
-		}
-
-		addresses, err := provider.GetInterfaceIPv4Addresses(candidate.DeviceName)
-		if err != nil || !utils.HasUsableIPv4(addresses) {
-			continue
-		}
-
-		gateway, _ := provider.GetInterfaceGateway(candidate.DeviceName)
-		return &candidate, true, strings.TrimSpace(gateway)
-	}
-
-	return first, false, ""
 }
 
 func selectPhoneInterface(candidates []utils.InterfaceInfo, provider NetworkProvider) (*utils.InterfaceInfo, bool, string, string) {

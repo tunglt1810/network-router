@@ -227,7 +227,7 @@ func TestTryReturnsAnswerFromDegradedUpstream(t *testing.T) {
 
 	resolver := newTestUpstream(t, &Config{}, nil, harness, nil)
 
-	reply, err := resolver.try(queryFor("example.com", dns.TypeA), "10.0.12.2:53", time.Now().Add(time.Second), 1)
+	reply, err := resolver.try(queryFor("example.com", dns.TypeA), "10.0.12.2:53", time.Now().Add(time.Second))
 	if err != nil {
 		t.Fatalf("degraded exchange: %v", err)
 	}
@@ -262,25 +262,6 @@ func TestResolveRetriesTruncatedAnswersOverTCP(t *testing.T) {
 	}
 	if !sawTCP {
 		t.Fatal("expected a TCP retry after a truncated reply")
-	}
-}
-
-func TestResolveHonoursExplicitUpstreamOverride(t *testing.T) {
-	harness := newHarness()
-	harness.responses["9.9.9.9:53"] = answerMsg(dns.RcodeSuccess, "203.0.113.11")
-
-	resolver := newTestUpstream(t,
-		&Config{DNSUpstream: "9.9.9.9"},
-		&NetworkSnapshot{PhoneReady: true, PhoneGateway: "172.20.10.1", PhoneInterface: deviceInfo("en7")},
-		harness,
-		[]string{"172.20.10.1"},
-	)
-
-	if _, _, err := resolver.Resolve(queryFor("example.com", dns.TypeA)); err != nil {
-		t.Fatalf("resolve: %v", err)
-	}
-	if tried := harness.tried(); len(tried) != 1 || tried[0] != "9.9.9.9:53" {
-		t.Fatalf("expected only the override to be used, got %v", tried)
 	}
 }
 

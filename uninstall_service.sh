@@ -1,261 +1,148 @@
 #!/bin/bash
 set -e
 
-# Colors for output
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 RED='\033[0;31m'
 BLUE='\033[0;34m'
-NC='\033[0m' # No Color
+NC='\033[0m'
 
-# Helper functions
-print_step() {
-    echo -e "${BLUE}[$(date +%H:%M:%S)]${NC} $1"
-}
+print_step() { echo -e "${BLUE}[$(date +%H:%M:%S)]${NC} $1"; }
+print_success() { echo -e "${GREEN}✓${NC} $1"; }
+print_warning() { echo -e "${YELLOW}⚠${NC} $1"; }
+print_error() { echo -e "${RED}✗${NC} $1"; }
 
-print_success() {
-    echo -e "${GREEN}✓${NC} $1"
-}
-
-print_warning() {
-    echo -e "${YELLOW}⚠${NC} $1"
-}
-
-print_error() {
-    echo -e "${RED}✗${NC} $1"
-}
-
-# Check for root
-if [ "$EUID" -ne 0 ]; then 
-  print_error "Please run as root: sudo ./uninstall_service.sh"
-  exit 1
+if [ "$EUID" -ne 0 ]; then
+    print_error "Please run as root: sudo ./uninstall_service.sh"
+    exit 1
 fi
 
-echo ""
-echo -e "${RED}╔═══════════════════════════════════════════╗${NC}"
-echo -e "${RED}║  Network Router Service Uninstaller       ║${NC}"
-echo -e "${RED}╚═══════════════════════════════════════════╝${NC}"
-echo ""
+BIN="/usr/local/bin/network-router"
+DAEMON_LABEL="com.bez.network-router"
+TRAY_LABEL="com.bez.network-router.tray"
+DAEMON_PLIST="/Library/LaunchDaemons/$DAEMON_LABEL.plist"
+# Anchored patterns match only the installed binary. A bare "network-router"
+# pattern also matches editors, language servers and shells that have the
+# repository path in their command line.
+DAEMON_PATTERN="^$BIN daemon"
+TRAY_PATTERN="^$BIN tray"
 
-# Get the real user
-REAL_USER="${SUDO_USER:-$USER}"
-REAL_HOME=$(eval echo ~$REAL_USER)
-
-# 1. Check current status
-print_step "Checking current status..."
-DAEMON_RUNNING=false
-TRAY_RUNNING=false
+# Under `sudo make reinstall` the Makefile calls sudo again, so SUDO_USER is
+# root there. Fall back to the console user, as install_service.sh does.
+if [ -n "$SUDO_USER" ] && [ "$SUDO_USER" != "root" ]; then
+    REAL_USER="$SUDO_USER"
+else
+    REAL_USER=$(stat -f "%Su" /dev/console)
+fi
+REAL_HOME=$(eval echo ~"$REAL_USER")
 REAL_UID=$(id -u "$REAL_USER")
+TRAY_PLIST="$REAL_HOME/Library/LaunchAgents/$TRAY_LABEL.plist"
 
-if launchctl list | grep -q "com.bez.network-router"; then
-    DAEMON_RUNNING=true
-    print_warning "Daemon is running"
+# Kills processes that match a pattern. SIGTERM comes first so the daemon can
+# remove its routes and resolver files. SIGKILL is used only after 5 seconds.
+stop_processes() {
+    local pattern="$1"
+    pkill -TERM -f "$pattern" 2>/dev/null || true
+    for _ in 1 2 3 4 5; do
+        pgrep -f "$pattern" >/dev/null || return 0
+        sleep 1
+    done
+    print_warning "Process still running after SIGTERM, sending SIGKILL: $pattern"
+    pkill -KILL -f "$pattern" 2>/dev/null || true
+}
+
+echo ""
+echo -e "${RED}Network Router Service Uninstaller${NC}"
+echo ""
+
+# 1. Clear routes while the daemon still answers. A daemon from this version
+# also clears them when it stops, but an older installed binary does not.
+# "clear" is used instead of "off" because an older binary knows only "clear".
+print_step "Clearing routes..."
+if [ -x "$BIN" ] && "$BIN" clear &>/dev/null; then
+    print_success "Routes cleared"
 else
-    print_success "Daemon is not running"
+    print_warning "Daemon did not answer; it clears routes when it stops"
 fi
 
-if sudo -u "$REAL_USER" launchctl list | grep -q "com.bez.network-router.tray"; then
-    TRAY_RUNNING=true
-    print_warning "Tray agent is running"
-else
-    print_success "Tray agent is not running"
-fi
-
-# 2. Clear routes before uninstalling
-if [ "$DAEMON_RUNNING" = true ]; then
-    print_step "Clearing routes..."
-    if /usr/local/bin/network-router clear &>/dev/null; then
-        print_success "Routes cleared"
-    else
-        print_warning "Could not clear routes (service may be unresponsive)"
-    fi
-fi
-
-# 3. Stop and unload daemon
+# 2. Stop the daemon.
 print_step "Stopping daemon service..."
-DAEMON_PLIST="/Library/LaunchDaemons/com.bez.network-router.plist"
+launchctl bootout "system/$DAEMON_LABEL" 2>/dev/null || true
+stop_processes "$DAEMON_PATTERN"
+print_success "Daemon stopped"
 
-# Try bootout first
-if launchctl bootout system/com.bez.network-router 2>/dev/null; then
-    print_success "Daemon service stopped via bootout"
-elif launchctl unload "$DAEMON_PLIST" 2>/dev/null; then
-    print_success "Daemon service stopped via unload"
-else
-    print_warning "Daemon service was not loaded via launchctl"
-fi
-
-# Force kill if still running
-sleep 1
-if launchctl list | grep -q "com.bez.network-router"; then
-    print_warning "Daemon still running, attempting force kill..."
-    DAEMON_PID=$(launchctl list | grep "com.bez.network-router" | awk '{print $1}')
-    if [ -n "$DAEMON_PID" ] && [ "$DAEMON_PID" != "-" ] && [ "$DAEMON_PID" -gt 0 ] 2>/dev/null; then
-        kill -9 "$DAEMON_PID" 2>/dev/null || true
-        sleep 1
-        if ! launchctl list | grep -q "com.bez.network-router"; then
-            print_success "Daemon force killed"
-        fi
-    else
-        # Try pkill as fallback
-        pkill -9 -f "network-router daemon" 2>/dev/null || true
-        sleep 1
-    fi
-    
-    # Final cleanup: remove from launchctl
-    if launchctl list | grep -q "com.bez.network-router"; then
-        launchctl remove com.bez.network-router 2>/dev/null || true
-        sleep 1
-    fi
-fi
-
-# 4. Stop and unload tray agent
+# 3. Stop the tray agent.
 print_step "Stopping tray agent..."
-TRAY_PLIST="$REAL_HOME/Library/LaunchAgents/com.bez.network-router.tray.plist"
-TRAY_ID="com.bez.network-router.tray"
-REAL_UID=$(id -u "$REAL_USER")
-
-# Retry loop for stopping
-for i in {1..3}; do
-    # Try bootout
-    if launchctl asuser "$REAL_UID" launchctl list 2>/dev/null | grep -q "$TRAY_ID"; then
-        launchctl bootout "gui/$REAL_UID/$TRAY_ID" 2>/dev/null || true
-    fi
-
-    # Try legacy unload
-    if [ -f "$TRAY_PLIST" ]; then
-        sudo -u "$REAL_USER" launchctl unload "$TRAY_PLIST" 2>/dev/null || true
-    fi
-    
-    # Try remove
-    if sudo -u "$REAL_USER" launchctl list 2>/dev/null | grep -q "$TRAY_ID"; then
-         sudo -u "$REAL_USER" launchctl remove "$TRAY_ID" 2>/dev/null || true
-    fi
-    
-    sleep 1
-done
-
-# Aggressive Kill Loop
-print_step "Killing any remaining processes..."
-for i in {1..3}; do
-    pkill -9 -f "network-router" 2>/dev/null || true
-    pgrep -f "network-router" | xargs kill -9 2>/dev/null || true
-    sleep 1
-    if ! pgrep -f "network-router" >/dev/null; then
-        break
-    fi
-done
-
-if ! pgrep -f "network-router tray" > /dev/null 2>&1; then
+# The job must be unloaded before the binary is removed. A job that is still
+# loaded is respawned with KeepAlive, finds no binary, and stays in "spawn
+# failed" for the rest of the login session.
+if [ "$REAL_USER" != "root" ]; then
+    launchctl bootout "gui/$REAL_UID/$TRAY_LABEL" 2>/dev/null || true
+    for _ in 1 2 3 4 5; do
+        launchctl print "gui/$REAL_UID/$TRAY_LABEL" &>/dev/null || break
+        sleep 1
+    done
+fi
+stop_processes "$TRAY_PATTERN"
+if [ "$REAL_USER" != "root" ] && launchctl print "gui/$REAL_UID/$TRAY_LABEL" &>/dev/null; then
+    print_warning "Tray agent is still registered. Run as $REAL_USER: launchctl bootout gui/$REAL_UID/$TRAY_LABEL"
+else
     print_success "Tray agent stopped"
 fi
 
-# 5. Remove files
-print_step "Removing files..."
-FILES_REMOVED=0
-
-remove_file() {
-    if [ -f "$1" ] || [ -d "$1" ]; then
-        rm -rf "$1"
-        FILES_REMOVED=$((FILES_REMOVED + 1))
-        echo "  ✓ Removed: $1"
-    fi
-}
-
-# 5.1 Clean up system resolvers
-print_step "Cleaning up system resolvers..."
-if [ -d "/etc/resolver" ]; then
+# 4. Remove resolver files this product generated.
+print_step "Removing generated resolver files..."
+if [ -d /etc/resolver ]; then
     for f in /etc/resolver/*; do
-        if [ -f "$f" ]; then
-            if grep -q "# Generated by Network Router" "$f"; then
-                rm "$f"
-                echo "  ✓ Removed resolver: $f"
-            fi
+        if [ -f "$f" ] && grep -q "# Generated by Network Router" "$f"; then
+            rm "$f"
+            echo "  ✓ Removed resolver: $f"
         fi
     done
 fi
 
-remove_file "/Library/LaunchDaemons/com.bez.network-router.plist"
-remove_file "$TRAY_PLIST"
-remove_file "/usr/local/etc/network-router/tray-agent.plist"
-remove_file "/usr/local/bin/network-router"
-remove_file "/usr/local/etc/network-router"
-remove_file "/usr/local/var/network-router"
-remove_file "/tmp/network-router.sock"
-remove_file "/tmp/network-router-tray.log"
-remove_file "/tmp/network-router-tray.err"
+# 5. Remove installed files.
+print_step "Removing files..."
+for path in \
+    "$DAEMON_PLIST" \
+    "$TRAY_PLIST" \
+    "$BIN" \
+    /usr/local/etc/network-router \
+    /usr/local/var/network-router \
+    /tmp/network-router.sock \
+    /tmp/network-router-tray.log \
+    /tmp/network-router-tray.err; do
+    if [ -e "$path" ]; then
+        rm -rf "$path"
+        echo "  ✓ Removed: $path"
+    fi
+done
 
-print_success "Removed $FILES_REMOVED file(s)/folder(s)"
-
-# 6. Verify uninstallation
-echo ""
-print_step "Verifying uninstallation..."
+# 6. Verify.
 ISSUES=0
-
-# Final check ensures nothing found
-if launchctl list | grep -q "com.bez.network-router"; then
-    # Silent attempt to remove one last time
-    launchctl remove com.bez.network-router 2>/dev/null || true
-fi
-
-if sudo -u "$REAL_USER" launchctl list | grep -q "com.bez.network-router.tray"; then
-    # Silent attempt to remove one last time
-    sudo -u "$REAL_USER" launchctl remove com.bez.network-router.tray 2>/dev/null || true
-fi
-
-# Now check for reporting
-if launchctl list | grep -q "com.bez.network-router"; then
-    print_warning "Daemon service still listed in launchctl (might be ghost entry)"
+if launchctl print "system/$DAEMON_LABEL" &>/dev/null; then
+    print_warning "Daemon service is still registered with launchd"
     ISSUES=$((ISSUES + 1))
 fi
-
-if sudo -u "$REAL_USER" launchctl list | grep -q "com.bez.network-router.tray"; then
-    print_warning "Tray agent still listed in launchctl (might be ghost entry)"
+if pgrep -f "^$BIN " >/dev/null; then
+    print_error "A network-router process is still running"
     ISSUES=$((ISSUES + 1))
 fi
-
-if [ -f "/usr/local/bin/network-router" ]; then
+if [ -e "$BIN" ]; then
     print_error "Binary still exists"
     ISSUES=$((ISSUES + 1))
 fi
 
-# Additional check: look for any network-router processes
-ORPHAN_PROCS=$(ps aux | grep "[n]etwork-router" | grep -v "uninstall_service.sh" | grep -v "tail -f" | wc -l | tr -d ' ')
-if [ "$ORPHAN_PROCS" -gt 0 ]; then
-    print_warning "Found $ORPHAN_PROCS orphan network-router process(es)"
-    # Final desperation kill
-    ps aux | grep "[n]etwork-router" | grep -v "uninstall_service.sh" | awk '{print $2}' | xargs kill -9 2>/dev/null
-    sleep 1
-    # Check again
-    if pgrep -f "network-router" >/dev/null; then
-         print_error "Could not kill some processes."
-         ISSUES=$((ISSUES + 1))
-    else
-         print_success "All processes killed."
-    fi
-fi
-
+echo ""
 if [ $ISSUES -eq 0 ]; then
-    print_success "Uninstallation verified - all clean!"
+    print_success "Uninstall complete"
 else
-    print_warning "Found $ISSUES issue(s), but attempted to force clean."
+    print_warning "Uninstall finished with $ISSUES issue(s)"
 fi
 
-echo ""
-echo -e "${GREEN}╔═══════════════════════════════════════════╗${NC}"
-echo -e "${GREEN}║  Uninstall Complete!                      ║${NC}"
-echo -e "${GREEN}╚═══════════════════════════════════════════╝${NC}"
-echo ""
-
-if [ -f "/var/log/network-router.log" ]; then
-    echo -e "${BLUE}Note:${NC} Log file kept at: /var/log/network-router.log"
-    echo "      Delete manually if needed: sudo rm /var/log/network-router.log"
-    echo ""
+if [ -f /var/log/network-router.log ]; then
+    echo -e "${BLUE}Note:${NC} Log file kept at /var/log/network-router.log"
+    echo "      Delete it manually if needed: sudo rm /var/log/network-router.log"
 fi
 
-# Exit 0 if binary is gone, regardless of ghost processes
-if [ ! -f "/usr/local/bin/network-router" ]; then
-    exit 0
-else
-    echo -e "${RED}Critical files remained. Uninstall failed.${NC}"
-    exit 1
-fi
+[ ! -e "$BIN" ]

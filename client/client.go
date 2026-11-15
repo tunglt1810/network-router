@@ -2,27 +2,13 @@ package client
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"time"
 
 	"network-router/daemon"
 )
-
-const socketPath = "/tmp/network-router.sock"
-
-// IPCRequest represents a client request
-type IPCRequest struct {
-	Action string                 `json:"action"`
-	Params map[string]interface{} `json:"params,omitempty"`
-}
-
-// IPCResponse represents a server response
-type IPCResponse struct {
-	Success bool                 `json:"success"`
-	Message string               `json:"message,omitempty"`
-	Data    *daemon.RouterStatus `json:"data,omitempty"`
-}
 
 // Client handles communication with the daemon
 type Client struct {
@@ -33,7 +19,7 @@ type Client struct {
 // NewClient creates a new client
 func NewClient() *Client {
 	return &Client{
-		socketPath: socketPath,
+		socketPath: daemon.SocketPath,
 		timeout:    5 * time.Second,
 	}
 }
@@ -41,15 +27,14 @@ func NewClient() *Client {
 // requestTimeout returns the timeout for an action. Route operations resolve
 // domains and wait behind each other in the daemon, so they get a long timeout.
 func (c *Client) requestTimeout(action string) time.Duration {
-	switch action {
-	case daemon.ActionApply, daemon.ActionClear, daemon.ActionRestart, daemon.ActionRefresh:
-		return 120 * time.Second
+	if action == daemon.ActionStatus {
+		return c.timeout
 	}
-	return c.timeout
+	return 120 * time.Second
 }
 
 // SendRequest sends a request to the daemon and returns the response
-func (c *Client) SendRequest(action string, params map[string]interface{}) (*IPCResponse, error) {
+func (c *Client) SendRequest(action string) (*daemon.IPCResponse, error) {
 	timeout := c.requestTimeout(action)
 
 	conn, err := net.DialTimeout("unix", c.socketPath, timeout)
@@ -61,17 +46,14 @@ func (c *Client) SendRequest(action string, params map[string]interface{}) (*IPC
 	// Set deadline for entire operation
 	conn.SetDeadline(time.Now().Add(timeout))
 
-	req := IPCRequest{
-		Action: action,
-		Params: params,
-	}
+	req := daemon.IPCRequest{Action: action}
 
 	encoder := json.NewEncoder(conn)
 	if err := encoder.Encode(req); err != nil {
 		return nil, fmt.Errorf("failed to send request: %w", err)
 	}
 
-	var response IPCResponse
+	var response daemon.IPCResponse
 	decoder := json.NewDecoder(conn)
 	if err := decoder.Decode(&response); err != nil {
 		return nil, fmt.Errorf("failed to receive response: %w", err)
@@ -80,9 +62,35 @@ func (c *Client) SendRequest(action string, params map[string]interface{}) (*IPC
 	return &response, nil
 }
 
+// Commands maps each CLI command, other than status, to its IPC action. The
+// older command names stay as aliases, so existing scripts keep working.
+var Commands = map[string]string{
+	"on":      daemon.ActionOn,
+	"off":     daemon.ActionOff,
+	"refresh": daemon.ActionRefresh,
+	"enable":  daemon.ActionOn,
+	"apply":   daemon.ActionOn,
+	"restart": daemon.ActionOn,
+	"disable": daemon.ActionOff,
+	"clear":   daemon.ActionOff,
+}
+
+// Run sends an action to the daemon and prints the daemon's message.
+func (c *Client) Run(action string) error {
+	resp, err := c.SendRequest(action)
+	if err != nil {
+		return err
+	}
+	if !resp.Success {
+		return errors.New(resp.Message)
+	}
+	fmt.Println("✓", resp.Message)
+	return nil
+}
+
 // Status gets the current daemon status
 func (c *Client) Status() error {
-	resp, err := c.SendRequest(daemon.ActionStatus, nil)
+	resp, err := c.SendRequest(daemon.ActionStatus)
 	if err != nil {
 		return err
 	}
@@ -95,11 +103,8 @@ func (c *Client) Status() error {
 	fmt.Println("================")
 
 	if data := resp.Data; data != nil {
-		fmt.Printf("Auto-routing:     %v\n", data.AutoRoutingEnabled)
+		fmt.Printf("Routing on:       %v\n", data.AutoRoutingEnabled)
 		fmt.Printf("Routes applied:   %v\n", data.RoutesApplied)
-		fmt.Printf("WiFi active:      %v\n", data.WifiActive)
-		fmt.Printf("Phone active:     %v\n", data.PhoneActive)
-		fmt.Printf("WiFi interface:   %s\n", data.WifiDevice)
 		fmt.Printf("Phone interface:  %s\n", data.PhoneDevice)
 		fmt.Printf("Phone gateway:    %s\n", data.PhoneGateway)
 		fmt.Printf("Phone ready:      %v\n", data.PhoneReady)
@@ -114,163 +119,8 @@ func (c *Client) Status() error {
 		if !data.LastClearedAt.IsZero() {
 			fmt.Printf("Last cleared:     %s\n", data.LastClearedAt.Format(time.RFC3339))
 		}
-		fmt.Printf("DNS Proxy:        %v\n", data.DNSProxyEnabled)
-		fmt.Printf("Auto Refresh:     %v\n", data.AutoRefreshRouteEnabled)
+		fmt.Printf("DNS proxy:        %v\n", data.DNSProxyRunning)
 	}
 
-	return nil
-}
-
-// Enable enables auto-routing
-func (c *Client) Enable() error {
-	resp, err := c.SendRequest(daemon.ActionEnable, nil)
-	if err != nil {
-		return err
-	}
-
-	if !resp.Success {
-		return fmt.Errorf("enable request failed: %s", resp.Message)
-	}
-
-	fmt.Println("✓ Auto-routing enabled")
-	return nil
-}
-
-// Disable disables auto-routing
-func (c *Client) Disable() error {
-	resp, err := c.SendRequest(daemon.ActionDisable, nil)
-	if err != nil {
-		return err
-	}
-
-	if !resp.Success {
-		return fmt.Errorf("disable request failed: %s", resp.Message)
-	}
-
-	fmt.Println("✓ Auto-routing disabled")
-	return nil
-}
-
-// Apply forces route application
-func (c *Client) Apply() error {
-	fmt.Println("Applying routes...")
-	resp, err := c.SendRequest(daemon.ActionApply, nil)
-	if err != nil {
-		return err
-	}
-
-	if !resp.Success {
-		return fmt.Errorf("apply request failed: %s", resp.Message)
-	}
-
-	fmt.Println("✓", resp.Message)
-	return nil
-}
-
-// Clear forces route clearing
-func (c *Client) Clear() error {
-	fmt.Println("Clearing routes...")
-	resp, err := c.SendRequest(daemon.ActionClear, nil)
-	if err != nil {
-		return err
-	}
-
-	if !resp.Success {
-		return fmt.Errorf("clear request failed: %s", resp.Message)
-	}
-
-	fmt.Println("✓", resp.Message)
-	return nil
-}
-
-// Restart clears and re-applies routes
-func (c *Client) Restart() error {
-	fmt.Println("Restarting routes...")
-	resp, err := c.SendRequest(daemon.ActionRestart, nil)
-	if err != nil {
-		return err
-	}
-
-	if !resp.Success {
-		return fmt.Errorf("restart request failed: %s", resp.Message)
-	}
-
-	fmt.Println("✓", resp.Message)
-	return nil
-}
-
-// Refresh re-resolves domains and re-applies routes
-func (c *Client) Refresh() error {
-	fmt.Println("Refreshing routes...")
-	resp, err := c.SendRequest(daemon.ActionRefresh, nil)
-	if err != nil {
-		return err
-	}
-
-	if !resp.Success {
-		return fmt.Errorf("refresh request failed: %s", resp.Message)
-	}
-
-	fmt.Println("✓", resp.Message)
-	return nil
-}
-
-// EnableAutoRefresh enables the scheduled route refresh
-func (c *Client) EnableAutoRefresh() error {
-	resp, err := c.SendRequest(daemon.ActionEnableAutoRefresh, nil)
-	if err != nil {
-		return err
-	}
-
-	if !resp.Success {
-		return fmt.Errorf("enable_auto_refresh request failed: %s", resp.Message)
-	}
-
-	fmt.Println("✓ Auto-refresh enabled")
-	return nil
-}
-
-// DisableAutoRefresh disables the scheduled route refresh
-func (c *Client) DisableAutoRefresh() error {
-	resp, err := c.SendRequest(daemon.ActionDisableAutoRefresh, nil)
-	if err != nil {
-		return err
-	}
-
-	if !resp.Success {
-		return fmt.Errorf("disable_auto_refresh request failed: %s", resp.Message)
-	}
-
-	fmt.Println("✓ Auto-refresh disabled")
-	return nil
-}
-
-// EnableDNSProxy enables the DNS proxy
-func (c *Client) EnableDNSProxy() error {
-	resp, err := c.SendRequest(daemon.ActionEnableDNSProxy, nil)
-	if err != nil {
-		return err
-	}
-
-	if !resp.Success {
-		return fmt.Errorf("enable_dns_proxy request failed: %s", resp.Message)
-	}
-
-	fmt.Println("✓ DNS Proxy enabled")
-	return nil
-}
-
-// DisableDNSProxy disables the DNS proxy
-func (c *Client) DisableDNSProxy() error {
-	resp, err := c.SendRequest(daemon.ActionDisableDNSProxy, nil)
-	if err != nil {
-		return err
-	}
-
-	if !resp.Success {
-		return fmt.Errorf("disable_dns_proxy request failed: %s", resp.Message)
-	}
-
-	fmt.Println("✓ DNS Proxy disabled")
 	return nil
 }

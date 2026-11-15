@@ -1,14 +1,17 @@
+//go:build darwin
+
 package tray
 
 import (
 	"fmt"
 	"log"
+	"os/exec"
+	"sync"
 	"time"
 
 	"network-router/assets"
 	"network-router/client"
 	"network-router/daemon"
-	"os/exec"
 
 	"github.com/getlantern/systray"
 )
@@ -19,21 +22,21 @@ const hideIconTooltip = "Make the icon invisible; its menu bar slot stays clicka
 
 // TrayApp manages the system tray application
 type TrayApp struct {
-	client     *client.Client
-	lastStatus *client.IPCResponse
+	client *client.Client
+
+	// mu guards lastStatus and iconHidden. The status poller, the delayed
+	// refreshes, and the menu handler all run on different goroutines.
+	mu         sync.Mutex
+	lastStatus *daemon.RouterStatus
 	iconHidden bool
 
 	// Menu items
-	mStatus      *systray.MenuItem
-	mToggle      *systray.MenuItem
-	mApply       *systray.MenuItem
-	mRefresh     *systray.MenuItem
-	mClear       *systray.MenuItem
-	mDNSProxy    *systray.MenuItem
-	mAutoRefresh *systray.MenuItem
-	mDebug       *systray.MenuItem
-	mHideIcon    *systray.MenuItem
-	mQuit        *systray.MenuItem
+	mStatus   *systray.MenuItem
+	mToggle   *systray.MenuItem
+	mRefresh  *systray.MenuItem
+	mDebug    *systray.MenuItem
+	mHideIcon *systray.MenuItem
+	mQuit     *systray.MenuItem
 }
 
 // NewTrayApp creates a new tray application
@@ -61,12 +64,8 @@ func (t *TrayApp) onReady() {
 
 	systray.AddSeparator()
 
-	t.mToggle = systray.AddMenuItem("🤖 Enable Auto-Routing", "Toggle auto-routing")
-	t.mApply = systray.AddMenuItem("⚡ Apply Routes", "Force apply routes now")
+	t.mToggle = systray.AddMenuItem("🤖 Turn Routing On", "Turn routing on or off")
 	t.mRefresh = systray.AddMenuItem("🔄 Refresh Routes", "Re-resolve IPs and re-apply")
-	t.mClear = systray.AddMenuItem("🗑️ Clear Routes", "Remove all routes")
-	t.mDNSProxy = systray.AddMenuItem("📡 Enable DNS Proxy", "Toggle DNS Proxy (for wildcard domains)")
-	t.mAutoRefresh = systray.AddMenuItem("⏳ Enable Auto Refresh", "Toggle scheduled route refresh")
 
 	systray.AddSeparator()
 	t.mDebug = systray.AddMenuItem("🔍 Show Debug", "Follow service logs in terminal")
@@ -106,105 +105,78 @@ func (t *TrayApp) pollStatus() {
 
 // updateStatus fetches and updates the status
 func (t *TrayApp) updateStatus() {
-	resp, err := t.client.SendRequest(daemon.ActionStatus, nil)
+	resp, err := t.client.SendRequest(daemon.ActionStatus)
 	if err != nil {
-		t.lastStatus = nil
+		t.setStatus(nil)
 		t.updateIcon(false, true)
 		t.mStatus.SetTitle("📊 Network Router - Status: Disconnected")
 		t.mStatus.SetTooltip(fmt.Sprintf("Error: %v", err))
 		t.mToggle.Disable()
-		t.mApply.Disable()
 		t.mRefresh.Disable()
-		t.mClear.Disable()
 		return
 	}
 
-	t.lastStatus = resp
-
 	if !resp.Success || resp.Data == nil {
+		t.setStatus(nil)
 		t.updateIcon(false, true)
 		t.mStatus.SetTitle("📊 Network Router - Status: Error")
 		return
 	}
 
-	// Extract status data
-	autoRouting := false
-	routesApplied := false
-	wifiActive := false
-	phoneActive := false
-	dnsProxyEnabled := false
-	autoRefreshEnabled := false
+	data := resp.Data
+	t.setStatus(data)
+	t.updateIcon(data.AutoRoutingEnabled && data.RoutesApplied, false)
 
-	if data := resp.Data; data != nil {
-		autoRouting = data.AutoRoutingEnabled
-		routesApplied = data.RoutesApplied
-		wifiActive = data.WifiActive
-		phoneActive = data.PhoneActive
-		dnsProxyEnabled = data.DNSProxyEnabled
-		autoRefreshEnabled = data.AutoRefreshRouteEnabled
-	}
-
-	// Update icon based on state
-	t.updateIcon(autoRouting && routesApplied, false)
-
-	// Update status text with "Network Router" prefix
-	statusText := fmt.Sprintf("📊 Network Router - Auto: %v | Routes: %v",
-		formatBool(autoRouting), formatBool(routesApplied))
-	tooltip := fmt.Sprintf("WiFi: %v | Phone: %v",
-		formatBool(wifiActive), formatBool(phoneActive))
-	if resp.Data.PhoneStatusReason != "" {
-		tooltip = fmt.Sprintf("%s | %s", tooltip, resp.Data.PhoneStatusReason)
+	statusText := fmt.Sprintf("📊 Network Router - On: %v | Routes: %v",
+		formatBool(data.AutoRoutingEnabled), formatBool(data.RoutesApplied))
+	tooltip := fmt.Sprintf("Phone: %v", formatBool(data.PhoneReady))
+	if data.PhoneStatusReason != "" {
+		tooltip = fmt.Sprintf("%s | %s", tooltip, data.PhoneStatusReason)
 	}
 
 	t.mStatus.SetTitle(statusText)
 	t.mStatus.SetTooltip(tooltip)
 
-	// Update toggle button
-	if autoRouting {
-		t.mToggle.SetTitle("🤖 Disable Auto-Routing")
+	if data.AutoRoutingEnabled {
+		t.mToggle.SetTitle("🤖 Turn Routing Off")
 	} else {
-		t.mToggle.SetTitle("🤖 Enable Auto-Routing")
+		t.mToggle.SetTitle("🤖 Turn Routing On")
 	}
 
-	// Update DNS Proxy button
-	if dnsProxyEnabled {
-		t.mDNSProxy.SetTitle("📡 Disable DNS Proxy")
-	} else {
-		t.mDNSProxy.SetTitle("📡 Enable DNS Proxy")
-	}
-
-	// Update Auto Refresh button
-	if autoRefreshEnabled {
-		t.mAutoRefresh.SetTitle("⏳ Disable Auto Refresh")
-	} else {
-		t.mAutoRefresh.SetTitle("⏳ Enable Auto Refresh")
-	}
-
-	// Enable all controls when connected
 	t.mToggle.Enable()
-	t.mApply.Enable()
 	t.mRefresh.Enable()
-	t.mClear.Enable()
-	t.mDNSProxy.Enable()
-	t.mAutoRefresh.Enable()
+}
+
+func (t *TrayApp) setStatus(status *daemon.RouterStatus) {
+	t.mu.Lock()
+	t.lastStatus = status
+	t.mu.Unlock()
+}
+
+// status returns the last successful status, or nil.
+func (t *TrayApp) status() *daemon.RouterStatus {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.lastStatus
 }
 
 // updateIcon updates the tray icon based on state
-func (t *TrayApp) updateIcon(active bool, error bool) {
-	// Don't update icon if it's hidden
-	if t.iconHidden {
+func (t *TrayApp) updateIcon(active bool, failed bool) {
+	t.mu.Lock()
+	hidden := t.iconHidden
+	t.mu.Unlock()
+	if hidden {
 		return
 	}
 
-	var icon []byte
-	if error {
-		icon = assets.IconError()
-	} else if active {
-		icon = assets.IconActive()
-	} else {
-		icon = assets.IconInactive()
+	switch {
+	case failed:
+		systray.SetIcon(assets.IconError())
+	case active:
+		systray.SetIcon(assets.IconActive())
+	default:
+		systray.SetIcon(assets.IconInactive())
 	}
-	systray.SetIcon(icon)
 }
 
 // handleMenuClicks handles menu item clicks
@@ -212,17 +184,9 @@ func (t *TrayApp) handleMenuClicks() {
 	for {
 		select {
 		case <-t.mToggle.ClickedCh:
-			t.handleToggle()
-		case <-t.mApply.ClickedCh:
-			t.handleApply()
+			t.toggleRouting()
 		case <-t.mRefresh.ClickedCh:
-			t.handleRefresh()
-		case <-t.mClear.ClickedCh:
-			t.handleClear()
-		case <-t.mDNSProxy.ClickedCh:
-			t.handleDNSProxyToggle()
-		case <-t.mAutoRefresh.ClickedCh:
-			t.handleAutoRefreshToggle()
+			t.run(daemon.ActionRefresh, "Failed to refresh routes")
 		case <-t.mHideIcon.ClickedCh:
 			t.handleHideIcon()
 		case <-t.mDebug.ClickedCh:
@@ -234,153 +198,57 @@ func (t *TrayApp) handleMenuClicks() {
 	}
 }
 
-// handleToggle toggles auto-routing
-func (t *TrayApp) handleToggle() {
-	if t.lastStatus == nil || t.lastStatus.Data == nil {
-		return
-	}
-
-	autoRouting := false
-	if data := t.lastStatus.Data; data != nil {
-		autoRouting = data.AutoRoutingEnabled
-	}
-
-	var err error
-	if autoRouting {
-		_, err = t.client.SendRequest(daemon.ActionDisable, nil)
-	} else {
-		_, err = t.client.SendRequest(daemon.ActionEnable, nil)
-	}
-
-	if err != nil {
-		log.Printf("Toggle error: %v", err)
-		t.showNotification("Error", fmt.Sprintf("Failed to toggle: %v", err))
-	} else {
-		// Immediately update status
-		time.AfterFunc(500*time.Millisecond, t.updateStatus)
-	}
-}
-
-// handleApply applies routes
-func (t *TrayApp) handleApply() {
-	resp, err := t.client.SendRequest(daemon.ActionApply, nil)
-	if err != nil {
-		log.Printf("Apply error: %v", err)
-		t.showNotification("Error", fmt.Sprintf("Failed to apply routes: %v", err))
-	} else if !resp.Success {
+// run sends an action and shows the daemon's message. A failure includes a
+// response with success=false.
+func (t *TrayApp) run(action, failure string) {
+	resp, err := t.client.SendRequest(action)
+	switch {
+	case err != nil:
+		t.showNotification("Error", fmt.Sprintf("%s: %v", failure, err))
+	case !resp.Success:
 		t.showNotification("Error", resp.Message)
-	} else {
+	default:
 		t.showNotification("Success", resp.Message)
-		time.AfterFunc(500*time.Millisecond, t.updateStatus)
 	}
+	time.AfterFunc(500*time.Millisecond, t.updateStatus)
 }
 
-// handleRefresh refreshes (re-resolves) routes
-func (t *TrayApp) handleRefresh() {
-	_, err := t.client.SendRequest(daemon.ActionRefresh, nil)
-	if err != nil {
-		log.Printf("Refresh error: %v", err)
-		t.showNotification("Error", fmt.Sprintf("Failed to refresh routes: %v", err))
-	} else {
-		t.showNotification("Success", "Routes filtering refreshed")
-		time.AfterFunc(500*time.Millisecond, t.updateStatus)
-	}
-}
-
-// handleClear clears routes
-func (t *TrayApp) handleClear() {
-	_, err := t.client.SendRequest(daemon.ActionClear, nil)
-	if err != nil {
-		log.Printf("Clear error: %v", err)
-		t.showNotification("Error", fmt.Sprintf("Failed to clear routes: %v", err))
-	} else {
-		t.showNotification("Success", "Routes cleared")
-		time.AfterFunc(500*time.Millisecond, t.updateStatus)
-	}
-}
-
-// handleDNSProxyToggle toggles DNS Proxy
-func (t *TrayApp) handleDNSProxyToggle() {
-	if t.lastStatus == nil || t.lastStatus.Data == nil {
+// toggleRouting turns routing off when the last status reports it on, and on
+// otherwise. It does nothing before the first successful status.
+func (t *TrayApp) toggleRouting() {
+	status := t.status()
+	if status == nil {
 		return
 	}
-
-	dnsProxyEnabled := false
-	if data := t.lastStatus.Data; data != nil {
-		dnsProxyEnabled = data.DNSProxyEnabled
+	action := daemon.ActionOn
+	if status.AutoRoutingEnabled {
+		action = daemon.ActionOff
 	}
-
-	var err error
-	if dnsProxyEnabled {
-		_, err = t.client.SendRequest(daemon.ActionDisableDNSProxy, nil)
-	} else {
-		_, err = t.client.SendRequest(daemon.ActionEnableDNSProxy, nil)
-	}
-
-	if err != nil {
-		log.Printf("DNS Proxy toggle error: %v", err)
-		t.showNotification("Error", fmt.Sprintf("Failed to toggle DNS Proxy: %v", err))
-	} else {
-		// Immediately update status
-		time.AfterFunc(500*time.Millisecond, t.updateStatus)
-	}
-}
-
-// handleAutoRefreshToggle toggles the auto refresh route feature
-func (t *TrayApp) handleAutoRefreshToggle() {
-	if t.lastStatus == nil || t.lastStatus.Data == nil {
-		return
-	}
-
-	autoRefreshEnabled := false
-	if data := t.lastStatus.Data; data != nil {
-		autoRefreshEnabled = data.AutoRefreshRouteEnabled
-	}
-
-	var err error
-	if autoRefreshEnabled {
-		_, err = t.client.SendRequest(daemon.ActionDisableAutoRefresh, nil)
-	} else {
-		_, err = t.client.SendRequest(daemon.ActionEnableAutoRefresh, nil)
-	}
-
-	if err != nil {
-		log.Printf("Auto refresh toggle error: %v", err)
-		t.showNotification("Error", fmt.Sprintf("Failed to toggle auto refresh: %v", err))
-	} else {
-		// Immediately update status
-		time.AfterFunc(500*time.Millisecond, t.updateStatus)
-	}
+	t.run(action, "Failed to switch routing")
 }
 
 // handleHideIcon toggles icon visibility
 func (t *TrayApp) handleHideIcon() {
+	t.mu.Lock()
 	t.iconHidden = !t.iconHidden
+	hidden := t.iconHidden
+	t.mu.Unlock()
 
-	if t.iconHidden {
+	if hidden {
 		// The icon becomes a transparent 1x1 pixel. The menu bar slot is still
 		// there and still clickable, which is how the menu stays reachable.
 		systray.SetIcon(assets.IconHidden())
 		t.mHideIcon.SetTitle("🕶️ Show Icon")
 		t.mHideIcon.SetTooltip("Show the tray icon again")
 		log.Println("Icon hidden - its menu bar slot is still clickable")
-	} else {
-		// Restore icon based on current state
-		if t.lastStatus != nil && t.lastStatus.Success && t.lastStatus.Data != nil {
-			autoRouting := false
-			routesApplied := false
-			if data := t.lastStatus.Data; data != nil {
-				autoRouting = data.AutoRoutingEnabled
-				routesApplied = data.RoutesApplied
-			}
-			t.updateIcon(autoRouting && routesApplied, false)
-		} else {
-			t.updateIcon(false, false)
-		}
-		t.mHideIcon.SetTitle("🕶️ Hide Icon")
-		t.mHideIcon.SetTooltip(hideIconTooltip)
-		log.Println("Icon shown")
+		return
 	}
+
+	status := t.status()
+	t.updateIcon(status != nil && status.AutoRoutingEnabled && status.RoutesApplied, false)
+	t.mHideIcon.SetTitle("🕶️ Hide Icon")
+	t.mHideIcon.SetTooltip(hideIconTooltip)
+	log.Println("Icon shown")
 }
 
 // handleDebug opens a terminal to tail the logs

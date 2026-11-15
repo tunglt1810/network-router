@@ -3,13 +3,18 @@ package daemon
 import (
 	"log"
 	"os"
-
-	"github.com/robfig/cron/v3"
+	"sync"
+	"time"
 )
 
-// LogManager truncates the daemon log on a daily schedule.
+const logPath = "/var/log/network-router.log"
+
+// LogManager truncates the daemon log every day at 10:00. It truncates in place
+// instead of rotating: launchd keeps the file descriptor open, so after a
+// rename the daemon would keep writing to the renamed file.
 type LogManager struct {
-	cron *cron.Cron
+	mu    sync.Mutex
+	timer *time.Timer
 }
 
 func NewLogManager() *LogManager {
@@ -17,28 +22,45 @@ func NewLogManager() *LogManager {
 }
 
 func (m *LogManager) Start() {
-	if m.cron != nil {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.timer != nil {
 		return
 	}
-	m.cron = cron.New()
-	_, err := m.cron.AddFunc("0 10 * * *", func() {
-		log.Println("⏰ Scheduled log cleanup: Truncating /var/log/network-router.log")
-		if err := os.Truncate("/var/log/network-router.log", 0); err != nil {
-			log.Printf("Error truncating log file: %v", err)
-		}
-	})
-	if err != nil {
-		log.Printf("Error scheduling log cleanup cron: %v", err)
-		return
-	}
-	m.cron.Start()
+	m.scheduleLocked()
 	log.Println("LogManager started (Log cleanup scheduled at 10:00 AM)")
 }
 
 func (m *LogManager) Stop() {
-	if m.cron != nil {
-		log.Println("Stopping LogManager...")
-		m.cron.Stop()
-		m.cron = nil
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.timer != nil {
+		m.timer.Stop()
+		m.timer = nil
 	}
+}
+
+func (m *LogManager) scheduleLocked() {
+	m.timer = time.AfterFunc(time.Until(nextCleanup(time.Now())), m.truncate)
+}
+
+func (m *LogManager) truncate() {
+	log.Printf("⏰ Scheduled log cleanup: Truncating %s", logPath)
+	if err := os.Truncate(logPath, 0); err != nil {
+		log.Printf("Error truncating log file: %v", err)
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.timer != nil {
+		m.scheduleLocked()
+	}
+}
+
+func nextCleanup(now time.Time) time.Time {
+	next := time.Date(now.Year(), now.Month(), now.Day(), 10, 0, 0, 0, now.Location())
+	if !next.After(now) {
+		next = next.AddDate(0, 0, 1)
+	}
+	return next
 }

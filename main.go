@@ -8,11 +8,13 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"log"
 	"os"
 	"os/exec"
+	"time"
 
 	"network-router/client"
 	"network-router/daemon"
@@ -28,42 +30,32 @@ func main() {
 
 	command := os.Args[1]
 
+	var err error
 	switch command {
 	case "daemon":
 		runDaemon()
 	case "tray":
 		runTray()
-	case "status":
-		runClientCommand("status")
-	case "enable":
-		runClientCommand("enable")
-	case "disable":
-		runClientCommand("disable")
-	case "apply":
-		runClientCommand("apply")
-	case "clear":
-		runClientCommand("clear")
-	case "restart":
-		runClientCommand("restart")
-	case "refresh":
-		runClientCommand("refresh")
-	case "enable-dns":
-		runClientCommand("enable-dns")
-	case "disable-dns":
-		runClientCommand("disable-dns")
-	case "enable-auto-refresh":
-		runClientCommand("enable-auto-refresh")
-	case "disable-auto-refresh":
-		runClientCommand("disable-auto-refresh")
 	case "tray-enable":
 		runTrayEnable()
 	case "tray-disable":
 		runTrayDisable()
+	case "status":
+		err = client.NewClient().Status()
 	case "help", "-h", "--help":
 		printUsage()
 	default:
-		fmt.Printf("Unknown command: %s\n\n", command)
-		printUsage()
+		action, ok := client.Commands[command]
+		if !ok {
+			fmt.Printf("Unknown command: %s\n\n", command)
+			printUsage()
+			os.Exit(1)
+		}
+		err = client.NewClient().Run(action)
+	}
+
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
 	}
 }
@@ -87,43 +79,6 @@ func runDaemon() {
 func runTray() {
 	app := tray.NewTrayApp()
 	app.Run()
-}
-
-func runClientCommand(command string) {
-	c := client.NewClient()
-
-	var err error
-	switch command {
-	case "status":
-		err = c.Status()
-	case "enable":
-		err = c.Enable()
-	case "disable":
-		err = c.Disable()
-	case "apply":
-		err = c.Apply()
-	case "clear":
-		err = c.Clear()
-	case "restart":
-		err = c.Restart()
-	case "refresh":
-		err = c.Refresh()
-	case "enable-dns":
-		err = c.EnableDNSProxy()
-	case "disable-dns":
-		err = c.DisableDNSProxy()
-	case "enable-auto-refresh":
-		err = c.EnableAutoRefresh()
-	case "disable-auto-refresh":
-		err = c.DisableAutoRefresh()
-	default:
-		err = fmt.Errorf("unhandled client command: %s", command)
-	}
-
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-		os.Exit(1)
-	}
 }
 
 func runTrayEnable() {
@@ -152,14 +107,26 @@ func runTrayEnable() {
 		os.Exit(1)
 	}
 
-	// 3. Bootstrap (register)
-	cmdRegister := exec.Command("launchctl", "bootstrap", fmt.Sprintf("gui/%d", uid), plistDest)
-	_ = cmdRegister.Run() // Ignore error if already bootstrapped
+	// 3. Unload any registered job. A job whose binary was missing at respawn
+	// stays in "spawn failed" and is never retried; kickstart on it waits
+	// forever. A fresh bootstrap clears that state.
+	_ = exec.Command("launchctl", "bootout", fullLabel).Run()
+	for i := 0; i < 10 && exec.Command("launchctl", "print", fullLabel).Run() == nil; i++ {
+		time.Sleep(500 * time.Millisecond)
+	}
 
-	// 4. Kickstart (start) - use -k to restart if already running
-	cmdStart := exec.Command("launchctl", "kickstart", "-k", fullLabel)
-	if err := cmdStart.Run(); err != nil {
-		fmt.Printf("Error starting tray: %v\n", err)
+	// 4. Bootstrap (register)
+	if out, err := exec.Command("launchctl", "bootstrap", fmt.Sprintf("gui/%d", uid), plistDest).CombinedOutput(); err != nil {
+		fmt.Printf("Error registering tray: %v: %s\n", err, out)
+		os.Exit(1)
+	}
+
+	// 5. Kickstart (start). The time limit keeps a stuck launchd job from
+	// hanging this command.
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if out, err := exec.CommandContext(ctx, "launchctl", "kickstart", fullLabel).CombinedOutput(); err != nil {
+		fmt.Printf("Error starting tray: %v: %s\n", err, out)
 		os.Exit(1)
 	}
 
@@ -201,16 +168,10 @@ func printUsage() {
 	fmt.Println("  tray                  Start the system tray application")
 	fmt.Println()
 	fmt.Println("  status                Show daemon status")
-	fmt.Println("  enable                Enable auto-routing")
-	fmt.Println("  disable               Disable auto-routing")
-	fmt.Println("  apply                 Force apply routes now")
-	fmt.Println("  clear                 Force clear routes now")
-	fmt.Println("  restart               Clear and re-apply routes")
+	fmt.Println("  on                    Turn routing on; apply routes when tethering is ready")
+	fmt.Println("                        (aliases: enable, apply, restart)")
+	fmt.Println("  off                   Turn routing off and clear routes (aliases: disable, clear)")
 	fmt.Println("  refresh               Re-resolve domains and re-apply routes")
-	fmt.Println("  enable-dns            Enable DNS Proxy")
-	fmt.Println("  disable-dns           Disable DNS Proxy")
-	fmt.Println("  enable-auto-refresh   Enable the scheduled route refresh")
-	fmt.Println("  disable-auto-refresh  Disable the scheduled route refresh")
 	fmt.Println("  tray-enable           Register and start the tray icon")
 	fmt.Println("  tray-disable          Stop and unregister the tray icon")
 	fmt.Println()
@@ -219,7 +180,6 @@ func printUsage() {
 	fmt.Println("Examples:")
 	fmt.Println("  sudo ./network-router daemon")
 	fmt.Println("  ./network-router status")
-	fmt.Println("  ./network-router enable")
-	fmt.Println("  ./network-router apply")
+	fmt.Println("  ./network-router on")
 	fmt.Println()
 }

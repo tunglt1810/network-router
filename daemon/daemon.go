@@ -8,17 +8,16 @@ import (
 	"syscall"
 
 	"network-router/pkg/core"
+	"network-router/pkg/utils"
 
 	"golang.org/x/sync/errgroup"
 )
 
 // Daemon represents the main daemon process
 type Daemon struct {
-	config          *core.Config
 	coordinator     *Coordinator
 	networkDetector *NetworkDetector
 	ipcServer       *IPCServer
-	dnsProxy        *core.DNSProxy
 	applier         *core.RouteApplier
 	logManager      *LogManager
 }
@@ -30,21 +29,19 @@ func NewDaemon(configPath string) (*Daemon, error) {
 		return nil, err
 	}
 
-	provider := core.NewOSNetworkProvider()
+	system := utils.System{}
 	snapshots := core.NewSnapshotStore()
-	applier := core.NewRouteApplier(core.NewOSRouteManager(), snapshots, config.ResolvedStatePath())
-	router := core.NewRouter(config, provider, snapshots, applier)
+	applier := core.NewRouteApplier(system, snapshots, core.StatePath)
+	router := core.NewRouter(config, applier)
 	upstream := core.NewUpstreamResolver(config, snapshots)
 	dnsProxy := core.NewDNSProxy(config, upstream, applier)
-	detector := NewNetworkDetector(config, provider, snapshots)
-	coordinator := NewCoordinator(config, router, applier, dnsProxy, snapshots, detector.Observe())
+	detector := NewNetworkDetector(config, system, snapshots)
+	coordinator := NewCoordinator(router, applier, dnsProxy, snapshots, detector.Observe())
 
 	return &Daemon{
-		config:          config,
 		coordinator:     coordinator,
 		networkDetector: detector,
 		ipcServer:       NewIPCServer(coordinator),
-		dnsProxy:        dnsProxy,
 		applier:         applier,
 		logManager:      NewLogManager(),
 	}, nil
@@ -77,8 +74,6 @@ func (d *Daemon) Run() error {
 	g.Go(func() error { return d.ipcServer.Start(gCtx) })
 	g.Go(func() error { return d.handleSignals(gCtx, cancel) })
 
-	log.Printf("DNS Proxy configured: Enabled=%v, Port=%d, ForceIPv4=%v",
-		d.config.DNSProxyEnabled, d.config.ProxyPort(), d.config.ForceIPv4Enabled())
 	log.Println("✓ Daemon started successfully")
 
 	if err := g.Wait(); err != nil && err != context.Canceled {
@@ -108,10 +103,11 @@ func (d *Daemon) handleSignals(ctx context.Context, cancel context.CancelFunc) e
 
 // cleanup performs cleanup operations before shutdown
 func (d *Daemon) cleanup() {
-	if d.dnsProxy != nil {
-		if err := d.dnsProxy.Stop(); err != nil {
-			log.Printf("DNS proxy shutdown error: %v", err)
-		}
+	// Routes point at the phone gateway. Left in place after the daemon stops,
+	// they blackhole their destinations once tethering goes away, and only the
+	// next start would reconcile them.
+	if err := d.coordinator.Shutdown(); err != nil {
+		log.Printf("Route cleanup error: %v", err)
 	}
 	if d.applier != nil {
 		d.applier.Stop()

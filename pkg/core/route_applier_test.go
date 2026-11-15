@@ -66,7 +66,7 @@ func TestApplierRejectsUnusableGateway(t *testing.T) {
 		snapshots.Store(&NetworkSnapshot{PhoneReady: true, PhoneGateway: gateway})
 		applier := NewRouteApplier(manager, snapshots, filepath.Join(t.TempDir(), "state.yaml"))
 
-		if err := applier.Add(RouteStatic, "203.0.113.1"); err == nil {
+		if err := addOne(applier, "203.0.113.1"); err == nil {
 			t.Errorf("gateway %q should have been rejected", gateway)
 		}
 		if len(manager.routes()) != 0 {
@@ -78,7 +78,7 @@ func TestApplierRejectsUnusableGateway(t *testing.T) {
 func TestApplierRejectsWhenPhoneIsNotReady(t *testing.T) {
 	applier, manager, _ := newApplierFixture(t, "")
 
-	if err := applier.Add(RouteStatic, "203.0.113.1"); err == nil {
+	if err := addOne(applier, "203.0.113.1"); err == nil {
 		t.Fatal("expected the applier to refuse routing without a tethered path")
 	}
 	if len(manager.routes()) != 0 {
@@ -90,7 +90,7 @@ func TestApplierIsIdempotent(t *testing.T) {
 	applier, manager, _ := newApplierFixture(t, "172.20.10.1")
 
 	for i := 0; i < 3; i++ {
-		if err := applier.Add(RouteDynamic, "203.0.113.7"); err != nil {
+		if err := addOne(applier, "203.0.113.7"); err != nil {
 			t.Fatalf("add %d: %v", i, err)
 		}
 	}
@@ -106,7 +106,7 @@ func TestApplierTracksRoutesThatAlreadyExist(t *testing.T) {
 	applier, manager, _ := newApplierFixture(t, "172.20.10.1")
 	manager.addExistsFirst = true
 
-	if err := applier.Add(RouteStatic, "203.0.113.9"); err != nil {
+	if err := addOne(applier, "203.0.113.9"); err != nil {
 		t.Fatalf("an existing entry is the desired state, not a failure: %v", err)
 	}
 	// Tracking it is what lets cleanup remove leftovers from a previous run.
@@ -118,10 +118,10 @@ func TestApplierTracksRoutesThatAlreadyExist(t *testing.T) {
 func TestApplierClearRemovesRoutesAndState(t *testing.T) {
 	applier, manager, statePath := newApplierFixture(t, "172.20.10.1")
 
-	if err := applier.Add(RouteStatic, "203.0.113.1"); err != nil {
+	if err := addOne(applier, "203.0.113.1"); err != nil {
 		t.Fatalf("add: %v", err)
 	}
-	if err := applier.Add(RouteDynamic, "203.0.113.2"); err != nil {
+	if err := addOne(applier, "203.0.113.2"); err != nil {
 		t.Fatalf("add: %v", err)
 	}
 	applier.flushState()
@@ -204,7 +204,7 @@ func TestApplierSubmitIsSafeUnderConcurrency(t *testing.T) {
 func TestApplierWriteStateIsAtomic(t *testing.T) {
 	applier, _, statePath := newApplierFixture(t, "172.20.10.1")
 
-	if err := applier.Add(RouteStatic, "203.0.113.1"); err != nil {
+	if err := addOne(applier, "203.0.113.1"); err != nil {
 		t.Fatalf("add: %v", err)
 	}
 	if err := applier.writeState(); err != nil {
@@ -215,7 +215,7 @@ func TestApplierWriteStateIsAtomic(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load state: %v", err)
 	}
-	if state.Routes["203.0.113.1/32"] != string(RouteStatic) {
+	if _, ok := state.Routes["203.0.113.1/32"]; !ok {
 		t.Fatalf("unexpected persisted state: %#v", state.Routes)
 	}
 
@@ -228,5 +228,29 @@ func TestApplierWriteStateIsAtomic(t *testing.T) {
 		if entry.Name() != filepath.Base(statePath) {
 			t.Fatalf("unexpected leftover file %s", entry.Name())
 		}
+	}
+}
+
+func addOne(applier *RouteApplier, destination string) error {
+	if failures := applier.AddMany([]string{destination}); len(failures) > 0 {
+		return failures[0]
+	}
+	return nil
+}
+
+// A state file written by an earlier version stores a route kind per entry.
+// Reconciliation must still read it, or an upgrade leaves those routes behind.
+func TestApplierReconcileReadsStateWithRouteKinds(t *testing.T) {
+	applier, manager, statePath := newApplierFixture(t, "172.20.10.1")
+	legacy := "routes:\n  203.0.113.5/32: dynamic\n  1.1.1.1/32: infrastructure\n"
+	if err := os.WriteFile(statePath, []byte(legacy), 0o600); err != nil {
+		t.Fatalf("write legacy state: %v", err)
+	}
+
+	if err := applier.ReconcileFromState(); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	if len(manager.deleted()) != 2 {
+		t.Fatalf("expected both legacy routes to be deleted, got %v", manager.deleted())
 	}
 }

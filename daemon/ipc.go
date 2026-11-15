@@ -9,31 +9,19 @@ import (
 	"os"
 )
 
-const socketPath = "/tmp/network-router.sock"
+const SocketPath = "/tmp/network-router.sock"
 
 // IPC Action Constants
 const (
-	ActionStatus             = "status"
-	ActionEnable             = "enable"
-	ActionDisable            = "disable"
-	ActionApply              = "apply"
-	ActionClear              = "clear"
-	ActionRestart            = "restart"
-	ActionRefresh            = "refresh"
-	ActionEnableDNSProxy     = "enable_dns_proxy"
-	ActionDisableDNSProxy    = "disable_dns_proxy"
-	ActionEnableAutoRefresh  = "enable_auto_refresh"
-	ActionDisableAutoRefresh = "disable_auto_refresh"
+	ActionStatus  = "status"
+	ActionOn      = "on"
+	ActionOff     = "off"
+	ActionRefresh = "refresh"
 )
-
-// msgApplyWaiting is returned when apply arms auto-routing but the tethered
-// path is not ready yet.
-const msgApplyWaiting = "Auto-routing is on. The daemon applies routes when tethering is ready."
 
 // IPCRequest represents a client request
 type IPCRequest struct {
-	Action string                 `json:"action"`
-	Params map[string]interface{} `json:"params,omitempty"`
+	Action string `json:"action"`
 }
 
 // IPCResponse represents a server response
@@ -59,20 +47,20 @@ func NewIPCServer(coordinator *Coordinator) *IPCServer {
 // Start starts the IPC server
 func (s *IPCServer) Start(ctx context.Context) error {
 	// Remove existing socket if present
-	os.Remove(socketPath)
+	os.Remove(SocketPath)
 
-	listener, err := net.Listen("unix", socketPath)
+	listener, err := net.Listen("unix", SocketPath)
 	if err != nil {
 		return fmt.Errorf("failed to create Unix socket: %w", err)
 	}
 	s.listener = listener
 
 	// Set permissions to allow user-mode apps (like tray) to connect
-	if err := os.Chmod(socketPath, 0666); err != nil {
+	if err := os.Chmod(SocketPath, 0666); err != nil {
 		return fmt.Errorf("failed to set socket permissions: %w", err)
 	}
 
-	log.Printf("IPC server listening on %s", socketPath)
+	log.Printf("IPC server listening on %s", SocketPath)
 
 	// Accept connections in a goroutine
 	go func() {
@@ -102,7 +90,7 @@ func (s *IPCServer) Stop() error {
 	if s.listener != nil {
 		s.listener.Close()
 	}
-	os.Remove(socketPath)
+	os.Remove(SocketPath)
 	return nil
 }
 
@@ -138,124 +126,27 @@ func (s *IPCServer) processRequest(req IPCRequest) IPCResponse {
 			Data:    s.coordinator.GetStatus(),
 		}
 
-	case ActionEnable:
-		s.coordinator.SetAutoRouting(true)
-		return IPCResponse{
-			Success: true,
-			Message: "Auto-routing enabled",
-		}
-
-	case ActionDisable:
-		s.coordinator.SetAutoRouting(false)
-		return IPCResponse{
-			Success: true,
-			Message: "Auto-routing disabled",
-		}
-
-	case ActionApply:
-		applied, err := s.coordinator.ForceApply()
+	case ActionOn:
+		applied, err := s.coordinator.On()
 		if err != nil {
-			return IPCResponse{
-				Success: false,
-				Message: fmt.Sprintf("Failed to apply routes: %v", err),
-			}
+			return IPCResponse{Success: false, Message: fmt.Sprintf("Failed to apply routes: %v", err)}
 		}
 		if !applied {
-			return IPCResponse{Success: true, Message: msgApplyWaiting}
+			return IPCResponse{Success: true, Message: "Routing is on. The daemon applies routes when tethering is ready."}
 		}
-		return IPCResponse{
-			Success: true,
-			Message: "Routes applied successfully",
-		}
+		return IPCResponse{Success: true, Message: "Routing is on. Routes are applied."}
 
-	case ActionClear:
-		autoRoutingWasEnabled := s.coordinator.GetStatus().AutoRoutingEnabled
-		if err := s.coordinator.ForceClear(); err != nil {
-			return IPCResponse{
-				Success: false,
-				Message: fmt.Sprintf("Failed to clear routes: %v", err),
-			}
+	case ActionOff:
+		if err := s.coordinator.Off(); err != nil {
+			return IPCResponse{Success: false, Message: fmt.Sprintf("Routing is off, but clearing routes failed: %v", err)}
 		}
-		msg := "Routes cleared successfully"
-		if autoRoutingWasEnabled {
-			msg += " (auto-routing disabled)"
-		}
-		return IPCResponse{
-			Success: true,
-			Message: msg,
-		}
-
-	case ActionRestart:
-		if err := s.coordinator.ForceClear(); err != nil {
-			return IPCResponse{
-				Success: false,
-				Message: fmt.Sprintf("Restart failed at clear: %v", err),
-			}
-		}
-		applied, err := s.coordinator.ForceApply()
-		if err != nil {
-			return IPCResponse{
-				Success: false,
-				Message: fmt.Sprintf("Restart failed at apply: %v", err),
-			}
-		}
-		if !applied {
-			return IPCResponse{Success: true, Message: msgApplyWaiting}
-		}
-		return IPCResponse{
-			Success: true,
-			Message: "Routes restarted successfully",
-		}
+		return IPCResponse{Success: true, Message: "Routing is off. Routes are cleared."}
 
 	case ActionRefresh:
-		if err := s.coordinator.ForceRefresh(); err != nil {
-			return IPCResponse{
-				Success: false,
-				Message: fmt.Sprintf("Failed to refresh routes: %v", err),
-			}
+		if err := s.coordinator.Refresh(); err != nil {
+			return IPCResponse{Success: false, Message: fmt.Sprintf("Failed to refresh routes: %v", err)}
 		}
-		return IPCResponse{
-			Success: true,
-			Message: "Routes filtering refreshed",
-		}
-
-	case ActionEnableDNSProxy:
-		if err := s.coordinator.SetDNSProxy(true); err != nil {
-			return IPCResponse{
-				Success: false,
-				Message: fmt.Sprintf("Failed to start DNS Proxy: %v", err),
-			}
-		}
-		return IPCResponse{
-			Success: true,
-			Message: "DNS Proxy enabled",
-		}
-
-	case ActionDisableDNSProxy:
-		if err := s.coordinator.SetDNSProxy(false); err != nil {
-			return IPCResponse{
-				Success: false,
-				Message: fmt.Sprintf("Failed to stop DNS Proxy: %v", err),
-			}
-		}
-		return IPCResponse{
-			Success: true,
-			Message: "DNS Proxy disabled",
-		}
-
-	case ActionEnableAutoRefresh:
-		s.coordinator.SetAutoRefresh(true)
-		return IPCResponse{
-			Success: true,
-			Message: "Auto-refresh route enabled",
-		}
-
-	case ActionDisableAutoRefresh:
-		s.coordinator.SetAutoRefresh(false)
-		return IPCResponse{
-			Success: true,
-			Message: "Auto-refresh route disabled",
-		}
+		return IPCResponse{Success: true, Message: "Routes refreshed"}
 
 	default:
 		return IPCResponse{

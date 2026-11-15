@@ -18,7 +18,7 @@ var ErrRouteMissing = errors.New("route not in table")
 
 // AddRouteViaGateway adds a static route via a specific gateway IP.
 // The daemon already runs as root, so `route` is invoked directly.
-func AddRouteViaGateway(destination string, gatewayIP string) error {
+func (System) AddRouteViaGateway(destination string, gatewayIP string) error {
 	output, err := exec.Command("route", "-n", "add", destination, gatewayIP).CombinedOutput()
 	if err == nil {
 		return nil
@@ -30,7 +30,7 @@ func AddRouteViaGateway(destination string, gatewayIP string) error {
 }
 
 // DeleteRoute removes a route from the routing table.
-func DeleteRoute(destination string) error {
+func (System) DeleteRoute(destination string) error {
 	output, err := exec.Command("route", "-n", "delete", destination).CombinedOutput()
 	if err == nil {
 		return nil

@@ -67,6 +67,8 @@ if [ "$REAL_USER" = "root" ] || [ -z "$REAL_USER" ]; then
     exit 1
 fi
 
+REAL_UID=$(id -u "$REAL_USER")
+
 print_step "Installing for user: $REAL_USER (home: $REAL_HOME)"
 
 # 1. Build (with auto-build)
@@ -132,10 +134,13 @@ if launchctl list | grep -q "com.bez.network-router"; then
     print_warning "Service already loaded, unloading first..."
     launchctl bootout system/com.bez.network-router 2>/dev/null || true
     launchctl unload "$DAEMON_PLIST_DEST" 2>/dev/null || true
-    sleep 1
-    # Force kill any existing process
-    pkill -9 -f "network-router daemon" 2>/dev/null || true
-    sleep 1
+    # The daemon removes its routes on SIGTERM, so give it time before
+    # SIGKILL. The anchored pattern matches only the installed binary.
+    for _ in 1 2 3 4 5; do
+        pgrep -f "^$INSTALL_BIN_PATH daemon" >/dev/null || break
+        sleep 1
+    done
+    pkill -9 -f "^$INSTALL_BIN_PATH daemon" 2>/dev/null || true
 fi
 
 # Try bootstrap first, fallback to load
@@ -149,10 +154,6 @@ else
     exit 1
 fi
 
-# 7. Tray icon is not started by default anymore. 
-# It can be enabled with 'network-router tray-enable'
-TRAY_STARTED=false
-
 sleep 2
 
 # Verify daemon is running
@@ -164,10 +165,7 @@ else
     exit 1
 fi
 
-# 7. Tray icon is NOT started by default (opt-in)
-print_step "Tray icon is currently disabled by default."
-
-# 8. Health check
+# 7. Health check
 print_step "Running health check..."
 sleep 1
 if [ -S "/tmp/network-router.sock" ]; then
@@ -189,20 +187,13 @@ echo -e "${GREEN}╚════════════════════
 echo ""
 echo -e "${BLUE}Services:${NC}"
 echo "  • Daemon: com.bez.network-router (running)"
-if [ "$TRAY_STARTED" = true ]; then
-    echo "  • Tray:   com.bez.network-router.tray (running)"
-else
-    echo "  • Tray:   com.bez.network-router.tray (installed, auto-start on login)"
-fi
+echo "  • Tray:   com.bez.network-router.tray (opt-in, not started)"
 echo ""
 echo -e "${BLUE}Commands:${NC}"
 echo "  • Status:  network-router status"
-echo "  • Enable:  network-router enable"
-echo "  • Disable: network-router disable"
-echo "  • Clear:   network-router clear"
-if [ "$TRAY_STARTED" != true ]; then
-    echo -e "  • ${YELLOW}Start Tray: network-router tray${NC}"
-fi
+echo "  • On:      network-router on"
+echo "  • Off:     network-router off"
+echo "  • Refresh: network-router refresh"
 echo ""
 echo -e "${BLUE}Logs:${NC}"
 echo "  • Daemon: /var/log/network-router.log"
